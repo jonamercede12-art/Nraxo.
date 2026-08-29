@@ -8,38 +8,27 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Descargar código
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Buscar proyecto Xcode
+      - name: Extraer ZIP
         run: |
-          PROJECT=$(find . -type d -name "*.xcodeproj" -print -quit)
+          set -e
 
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró el proyecto Xcode"
-            exit 1
-          fi
+          unzip -q "3105-with-github-actions.zip" -d extracted
 
-          echo "Proyecto encontrado: $PROJECT"
-          xcodebuild -list -project "$PROJECT"
+          echo "Contenido:"
+          find extracted -maxdepth 3 -type d
 
-      - name: Compilar aplicación
+      - name: Compilar ThreeOneOSFive
         run: |
-          PROJECT=$(find . -type d -name "*.xcodeproj" -print -quit)
+          set -e
 
-          SCHEME=$(xcodebuild -list -project "$PROJECT" 2>/dev/null | \
-            awk '/Schemes:/{found=1; next} found && NF {print; exit}' | xargs)
-
-          if [ -z "$SCHEME" ]; then
-            echo "ERROR: No se encontró ningún Scheme"
-            exit 1
-          fi
-
-          echo "Scheme encontrado: $SCHEME"
+          cd extracted/3105-main
 
           xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
+            -project "ThreeOneOSFive.xcodeproj" \
+            -scheme "3105" \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
@@ -50,18 +39,28 @@ jobs:
 
       - name: Crear IPA
         run: |
-          APP=$(find build -type d -name "*.app" -print -quit)
+          set -e
+
+          APP=$(find extracted/3105-main/build/Build/Products -type d -name "*.app" | head -1)
 
           if [ -z "$APP" ]; then
             echo "ERROR: No se encontró el archivo .app"
             exit 1
           fi
 
+          echo "APP encontrada:"
+          echo "$APP"
+
+          rm -rf Payload ThreeOneOSFive.ipa
+
           mkdir Payload
           cp -R "$APP" Payload/
-          zip -r ThreeOneOSFive.ipa Payload
 
-      - name: Guardar IPA
+          zip -qry ThreeOneOSFive.ipa Payload
+
+          ls -lh ThreeOneOSFive.ipa
+
+      - name: Subir IPA
         uses: actions/upload-artifact@v4
         with:
           name: ThreeOneOSFive-IPA
