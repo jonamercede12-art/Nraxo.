@@ -1,1 +1,68 @@
+name: Build iOS IPA
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Buscar proyecto Xcode
+        run: |
+          PROJECT=$(find . -type d -name "*.xcodeproj" -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No se encontró el proyecto Xcode"
+            exit 1
+          fi
+
+          echo "Proyecto encontrado: $PROJECT"
+          xcodebuild -list -project "$PROJECT"
+
+      - name: Compilar aplicación
+        run: |
+          PROJECT=$(find . -type d -name "*.xcodeproj" -print -quit)
+
+          SCHEME=$(xcodebuild -list -project "$PROJECT" 2>/dev/null | \
+            awk '/Schemes:/{found=1; next} found && NF {print; exit}' | xargs)
+
+          if [ -z "$SCHEME" ]; then
+            echo "ERROR: No se encontró ningún Scheme"
+            exit 1
+          fi
+
+          echo "Scheme encontrado: $SCHEME"
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Crear IPA
+        run: |
+          APP=$(find build -type d -name "*.app" -print -quit)
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: No se encontró el archivo .app"
+            exit 1
+          fi
+
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -r ThreeOneOSFive.ipa Payload
+
+      - name: Guardar IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThreeOneOSFive-IPA
+          path: ThreeOneOSFive.ipa
