@@ -20,11 +20,28 @@ jobs:
           echo "Contenido:"
           find extracted -maxdepth 3 -type d
 
+      - name: Verificar archivos del proyecto
+        run: |
+          set -e
+
+          echo "Buscando App.swift..."
+          find extracted -name "App.swift" -print
+
+          echo ""
+          echo "Buscando PatchProjectLibrary.swift..."
+          find extracted -name "PatchProjectLibrary.swift" -print
+
       - name: Corregir App.swift
         run: |
           set -e
 
           APP_FILE="extracted/3105-main/ThreeOneOSFive/App.swift"
+
+          if [ ! -f "$APP_FILE" ]; then
+            echo "ERROR: No se encontró:"
+            echo "$APP_FILE"
+            exit 1
+          fi
 
           python3 - "$APP_FILE" <<'PY'
           import sys
@@ -53,14 +70,14 @@ jobs:
               print("No hay duplicado que eliminar.")
               raise SystemExit(0)
 
-          # Segunda declaración
           start = positions[1]
 
-          # Buscar la llave de apertura
           brace = text.find("{", start)
 
           if brace == -1:
-              raise SystemExit("No se encontró la llave de maskedKey.")
+              raise SystemExit(
+                  "No se encontró la llave de maskedKey."
+              )
 
           depth = 0
           i = brace
@@ -76,7 +93,6 @@ jobs:
                   if depth == 0:
                       end = i + 1
 
-                      # Eliminar espacios y salto de línea posteriores
                       while end < len(text) and text[end] in " \t":
                           end += 1
 
@@ -85,9 +101,15 @@ jobs:
 
                       text = text[:start] + text[end:]
 
-                      path.write_text(text, encoding="utf-8")
+                      path.write_text(
+                          text,
+                          encoding="utf-8"
+                      )
 
-                      print("Duplicado maskedKey eliminado correctamente.")
+                      print(
+                          "Duplicado maskedKey eliminado correctamente."
+                      )
+
                       print(
                           "Declaraciones restantes:",
                           text.count(needle)
@@ -98,14 +120,99 @@ jobs:
               i += 1
 
           raise SystemExit(
-              "No se pudo encontrar el final de la segunda propiedad maskedKey."
+              "No se pudo encontrar el final de la segunda "
+              "propiedad maskedKey."
           )
-
           PY
 
           echo ""
           echo "Verificación:"
           grep -n "var maskedKey: String" "$APP_FILE" || true
+
+      - name: Corregir PatchProjectLibrary.swift
+        run: |
+          set -e
+
+          PATCH_FILE="extracted/3105-main/ThreeOneOSFive/helpers/PatchProjectLibrary.swift"
+
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "PatchProjectLibrary.swift no encontrado en la ruta esperada."
+            echo "Buscando archivo..."
+            PATCH_FILE=$(find extracted -name "PatchProjectLibrary.swift" -type f | head -1)
+          fi
+
+          if [ -z "$PATCH_FILE" ] || [ ! -f "$PATCH_FILE" ]; then
+            echo "No se encontró PatchProjectLibrary.swift."
+            exit 1
+          fi
+
+          echo "Archivo encontrado:"
+          echo "$PATCH_FILE"
+
+          python3 - "$PATCH_FILE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          text = path.read_text(encoding="utf-8")
+
+          old = "! $0.lastPathComponent.uppercased()"
+          new = "!$0.lastPathComponent.uppercased()"
+
+          occurrences = text.count(old)
+
+          print(
+              "Operadores con espacio encontrados:",
+              occurrences
+          )
+
+          if occurrences > 0:
+              text = text.replace(old, new)
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+              print(
+                  "Corrección aplicada correctamente."
+              )
+          else:
+              print(
+                  "No fue necesario modificar el operador."
+              )
+          PY
+
+          echo ""
+          echo "Verificación PatchProjectLibrary.swift:"
+          grep -n "lastPathComponent.uppercased" "$PATCH_FILE" || true
+
+      - name: Comprobar estructura
+        run: |
+          set -e
+
+          PROJECT_DIR="extracted/3105-main"
+
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "ERROR: No existe:"
+            echo "$PROJECT_DIR"
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/ThreeOneOSFive.xcodeproj/project.pbxproj" ]; then
+            echo "ERROR: No se encontró el proyecto Xcode."
+            exit 1
+          fi
+
+          echo "Proyecto encontrado correctamente."
+
+          echo ""
+          echo "Archivos Swift:"
+          find "$PROJECT_DIR/ThreeOneOSFive" \
+            -type f \
+            -name "*.swift" \
+            -print
 
       - name: Compilar ThreeOneOSFive
         run: |
@@ -135,6 +242,11 @@ jobs:
 
           if [ -z "$APP" ]; then
             echo "ERROR: No se encontró el archivo .app"
+            echo ""
+            echo "Contenido de Products:"
+            find extracted/3105-main/build/Build/Products \
+              -maxdepth 3 \
+              -print || true
             exit 1
           fi
 
@@ -149,6 +261,8 @@ jobs:
 
           zip -qry ThreeOneOSFive.ipa Payload
 
+          echo ""
+          echo "IPA creada:"
           ls -lh ThreeOneOSFive.ipa
 
       - name: Subir IPA
