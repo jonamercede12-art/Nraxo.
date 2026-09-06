@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build IPA
 
 on:
   workflow_dispatch:
@@ -11,218 +11,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract project ZIP
-        shell: bash
+      - name: Extract project
         run: |
-          set -euo pipefail
-
+          set -e
           rm -rf project
           mkdir -p project
+          unzip -q "$(find . -maxdepth 2 -type f -name '*.zip' | head -n 1)" -d project
 
-          ZIP_FILE="$(find . -maxdepth 2 -type f -name '*.zip' | head -n 1)"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No se encontró ningún archivo ZIP."
-            exit 1
-          fi
-
-          echo "Usando ZIP: $ZIP_FILE"
-          unzip -q "$ZIP_FILE" -d project
-
-      - name: Locate Xcode project
-        shell: bash
+      - name: Find project
         run: |
-          set -euo pipefail
-
-          PROJECT="$(find "$GITHUB_WORKSPACE/project" \
-            -type d -name '*.xcodeproj' \
-            -print -quit)"
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró ningún .xcodeproj"
-            find "$GITHUB_WORKSPACE/project" -maxdepth 5 -type f | head -100
-            exit 1
-          fi
-
+          set -e
+          PROJECT=$(find "$GITHUB_WORKSPACE/project" -type d -name "*.xcodeproj" -print -quit)
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-          echo "Proyecto encontrado: $PROJECT"
 
-      - name: Apply patches
-        shell: bash
+      - name: Build
         run: |
-          set -euo pipefail
-
-          PATCH_FOUND=0
-
-          while IFS= read -r PATCH; do
-            [ -z "$PATCH" ] && continue
-
-            echo "Aplicando patch: $PATCH"
-
-            if git apply --check "$PATCH" >/dev/null 2>&1; then
-              git apply "$PATCH"
-              PATCH_FOUND=1
-            else
-              echo "Patch no aplicable directamente: $PATCH"
-            fi
-          done < <(find "$GITHUB_WORKSPACE" -type f \( -name '*.patch' -o -name '*.diff' \))
-
-          if [ "$PATCH_FOUND" -eq 0 ]; then
-            echo "No se aplicaron patches externos."
-          fi
-
-      - name: Remove unwanted menu options
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 <<'PY'
-          import os
-          import re
-
-          root = os.environ["GITHUB_WORKSPACE"]
-
-          forbidden = [
-              "Aimbot Pecho",
-              "AimbotPecho",
-              "Aimbot_Pecho",
-          ]
-
-          extensions = {
-              ".swift",
-              ".m",
-              ".mm",
-              ".h",
-              ".hpp",
-              ".cpp",
-              ".c",
-              ".plist",
-              ".storyboard",
-              ".xib",
-          }
-
-          for dirpath, dirnames, filenames in os.walk(root):
-              dirnames[:] = [
-                  d for d in dirnames
-                  if d not in {
-                      ".git",
-                      "DerivedData",
-                      "build",
-                      "project/build",
-                  }
-              ]
-
-              for filename in filenames:
-                  path = os.path.join(dirpath, filename)
-
-                  if os.path.splitext(filename)[1] not in extensions:
-                      continue
-
-                  try:
-                      with open(path, "r", encoding="utf-8") as f:
-                          data = f.read()
-                  except Exception:
-                      continue
-
-                  original = data
-
-                  for text in forbidden:
-                      data = data.replace(text, "")
-
-                  if data != original:
-                      with open(path, "w", encoding="utf-8") as f:
-                          f.write(data)
-
-                      print("Modificado:", path)
-          PY
-
-      - name: Select Xcode
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -d "/Applications/Xcode_26.6.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_26.6.app"
-          else
-            sudo xcode-select -s "/Applications/Xcode.app"
-          fi
-
-          xcodebuild -version
-
-      - name: Verify project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ ! -d "$PROJECT" ]; then
-            echo "ERROR: El proyecto no existe:"
-            echo "$PROJECT"
-            exit 1
-          fi
-
-          echo "Proyecto:"
-          echo "$PROJECT"
-
-          echo "Contenido:"
-          ls -la "$(dirname "$PROJECT")"
-
-      - name: Build unsigned app
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf build
-          mkdir -p build
+          set -e
 
           xcodebuild \
             -project "$PROJECT" \
             -scheme "3105" \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
+            -derivedDataPath "$GITHUB_WORKSPACE/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             clean build
 
-      - name: Find built app
-        shell: bash
+      - name: Convert APP to IPA
         run: |
-          set -euo pipefail
+          set -e
 
-          APP="$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products" \
-            -type d \
-            -name '*.app' \
-            -print -quit)"
+          APP=$(find "$GITHUB_WORKSPACE/build/Build/Products" -type d -name "*.app" -print -quit)
 
           if [ -z "$APP" ]; then
-            echo "ERROR: No se encontró el .app generado."
-            find "$GITHUB_WORKSPACE/build" -type f | head -200
+            echo "No se encontró el archivo .app"
             exit 1
           fi
 
-          echo "APP=$APP" >> "$GITHUB_ENV"
-          echo "APP encontrado: $APP"
+          mkdir -p "$GITHUB_WORKSPACE/ipa/Payload"
+          cp -R "$APP" "$GITHUB_WORKSPACE/ipa/Payload/"
 
-      - name: Create IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf build/Payload
-          mkdir -p build/Payload
-
-          cp -R "$APP" build/Payload/
-
-          cd build
-          zip -qry 3105.ipa Payload
-
-          echo "IPA generado:"
-          ls -lh 3105.ipa
+          cd "$GITHUB_WORKSPACE/ipa"
+          zip -qry "$GITHUB_WORKSPACE/3105.ipa" Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: 3105-ipa
-          path: build/3105.ipa
-          if-no-files-found: error
+          path: 3105.ipa
