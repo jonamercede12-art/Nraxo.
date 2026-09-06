@@ -18,18 +18,32 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          echo "Directorio actual:"
+          echo "Directorio:"
           pwd
           echo "Contenido:"
           ls -la
-          echo "Archivos del proyecto:"
+          echo "Archivos principales:"
           find . -maxdepth 3 -type f | sort | head -300
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
+          node-version: 24
+
+      - name: Check package.json
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if [ ! -f package.json ]; then
+            echo "ERROR: No se encontró package.json en la raíz del proyecto."
+            echo "Buscando package.json:"
+            find . -name package.json -not -path './node_modules/*' -print
+            exit 1
+          fi
+
+          echo "package.json encontrado:"
+          cat package.json
 
       - name: Install dependencies
         shell: bash
@@ -37,12 +51,18 @@ jobs:
           set -euxo pipefail
 
           if [ -f package-lock.json ]; then
+            echo "Usando package-lock.json"
             npm ci
-          elif [ -f package.json ]; then
-            npm install
+          elif [ -f npm-shrinkwrap.json ]; then
+            echo "Usando npm-shrinkwrap.json"
+            npm ci
+          elif [ -f yarn.lock ]; then
+            echo "Usando yarn.lock"
+            corepack enable
+            yarn install --frozen-lockfile
           else
-            echo "No se encontró package.json."
-            exit 1
+            echo "No existe lockfile. Usando npm install."
+            npm install
           fi
 
       - name: Build
@@ -50,17 +70,13 @@ jobs:
         run: |
           set -euxo pipefail
 
-          if [ ! -f package.json ]; then
-            echo "No se encontró package.json."
-            exit 1
-          fi
-
           echo "Scripts disponibles:"
-          node -e "console.log(require('./package.json').scripts || {})"
+          npm run
 
-          if npm run | grep -qE '^  build$'; then
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+            echo "Ejecutando build..."
             npm run build
           else
-            echo "El proyecto no tiene un script 'build' en package.json."
+            echo "ERROR: package.json no contiene un script 'build'."
             exit 1
           fi
