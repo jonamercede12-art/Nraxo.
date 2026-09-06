@@ -1,164 +1,114 @@
-name: Build Nraxo IPA
+name: iOS Build
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+workflow_dispatch:
+push:
+branches:
+- main
 
 jobs:
-  build:
-    runs-on: macos-15
+build:
+runs-on: macos-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Find Xcode project
-        id: project
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT=$(find . -name "*.xcodeproj" -type d | head -n 1)
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró ningún archivo .xcodeproj"
-            find . -maxdepth 4 -type f | sort | head -200
-            exit 1
-          fi
-
-          echo "Proyecto encontrado: $PROJECT"
-          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
-
-      - name: Find scheme
-        id: scheme
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT="${{ steps.project.outputs.project }}"
-
-          SCHEMES=$(xcodebuild \
-            -project "$PROJECT" \
-            -list \
-            | sed -n '/Schemes:/,/^$/p' \
-            | tail -n +2 \
-            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
-            | grep -v '^$' \
-            | head -n 1)
-
-          if [ -z "$SCHEMES" ]; then
-            echo "ERROR: No se encontró ningún scheme."
-            xcodebuild -project "$PROJECT" -list
-            exit 1
-          fi
-
-          echo "Scheme encontrado: $SCHEMES"
-          echo "scheme=$SCHEMES" >> "$GITHUB_OUTPUT"
-
-      - name: Fix patch reference
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT="${{ steps.project.outputs.project }}"
-          PBX="$PROJECT/project.pbxproj"
-
-          echo "Revisando: $PBX"
-
-          if grep -q "AIMBOT PECHO FFTH.3105" "$PBX"; then
-            echo "Referencia incorrecta encontrada."
-
-            sed -i '' \
-              's/AIMBOT PECHO FFTH\.3105/AIMBOT PECHO.3105/g' \
-              "$PBX"
-
-            echo "Referencia corregida."
-          else
-            echo "No se encontró la referencia incorrecta. Continuando."
-          fi
-
-      - name: Show project information
-        shell: bash
-        run: |
-          PROJECT="${{ steps.project.outputs.project }}"
-          SCHEME="${{ steps.scheme.outputs.scheme }}"
-
-          echo "PROJECT = $PROJECT"
-          echo "SCHEME  = $SCHEME"
-
-          xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -showBuildSettings \
-            | grep -E "PRODUCT_NAME|PRODUCT_BUNDLE_IDENTIFIER|TARGET_NAME" \
-            || true
-
-      - name: Clean
-        shell: bash
-        run: |
-          PROJECT="${{ steps.project.outputs.project }}"
-          SCHEME="${{ steps.scheme.outputs.scheme }}"
-
-          xcodebuild clean \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -configuration Release
-
-      - name: Build archive
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT="${{ steps.project.outputs.project }}"
-          SCHEME="${{ steps.scheme.outputs.scheme }}"
-
-          mkdir -p build
-
-          xcodebuild archive \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -archivePath "$PWD/build/Nraxo.xcarchive" \
-            -sdk iphoneos \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-
-      - name: Create IPA
-        shell: bash
-        run: |
-          set -e
-
-          APP=$(find "build/Nraxo.xcarchive/Products/Applications" \
-            -maxdepth 1 \
-            -name "*.app" \
-            -type d \
-            | head -n 1)
-
-          if [ -z "$APP" ]; then
-            echo "ERROR: No se encontró la aplicación compilada."
-            find build/Nraxo.xcarchive -maxdepth 5 -type f | head -200
-            exit 1
-          fi
-
-          echo "Aplicación encontrada: $APP"
-
-          rm -rf build/Payload
-          mkdir -p build/Payload
-
-          cp -R "$APP" build/Payload/
-
-          cd build
-          zip -qry Nraxo.ipa Payload
-
-          echo "IPA creada:"
-          ls -lh Nraxo.ipa
-
-      - name: Upload Nraxo IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: Nraxo-IPA
-          path: build/Nraxo.ipa
-          if-no-files-found: error
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
+  - name: Prepare project
+    shell: bash
+    run: |
+      set -e
+      echo "Contenido inicial:"
+      ls -la
+      ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+      if [ -z "$ZIP_FILE" ]; then
+        echo "ERROR: No se encontró ningún archivo .zip"
+        exit 1
+      fi
+      echo "ZIP encontrado: $ZIP_FILE"
+      mkdir -p extracted
+      unzip -o "$ZIP_FILE" -d extracted
+      echo "Buscando archivos Xcode..."
+      PROJECT="$(find "$GITHUB_WORKSPACE/extracted" -type d -name '*.xcodeproj' -print -quit)"
+      WORKSPACE="$(find "$GITHUB_WORKSPACE/extracted" -type d -name '*.xcworkspace' -print -quit)"
+      if [ -n "$PROJECT" ]; then
+        echo "Xcode project encontrado:"
+        echo "$PROJECT"
+        echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+      elif [ -n "$WORKSPACE" ]; then
+        echo "Xcode workspace encontrado:"
+        echo "$WORKSPACE"
+        echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+      else
+        echo "ERROR: Después de descomprimir el ZIP no se encontró ningún .xcodeproj ni .xcworkspace"
+        echo ""
+        echo "Archivos encontrados:"
+        find "$GITHUB_WORKSPACE/extracted" -maxdepth 5 -type f | head -200
+        exit 1
+      fi
+  - name: Detect scheme
+    shell: bash
+    run: |
+      set -e
+      if [ -n "${PROJECT:-}" ]; then
+        echo "Analizando proyecto:"
+        xcodebuild -list -project "$PROJECT"
+        SCHEME="$(xcodebuild -list -project "$PROJECT" 2>/dev/null \
+          | awk '/Schemes:/ {found=1; next} found && NF {gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}')"
+      else
+        echo "Analizando workspace:"
+        xcodebuild -list -workspace "$WORKSPACE"
+        SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" 2>/dev/null \
+          | awk '/Schemes:/ {found=1; next} found && NF {gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}')"
+      fi
+      if [ -z "$SCHEME" ]; then
+        echo "ERROR: No se pudo detectar ningún Scheme de Xcode"
+        exit 1
+      fi
+      echo "Scheme detectado: $SCHEME"
+      echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+  - name: Build iOS
+    shell: bash
+    run: |
+      set -e
+      DERIVED_DATA="$GITHUB_WORKSPACE/build"
+      if [ -n "${PROJECT:-}" ]; then
+        xcodebuild \
+          -project "$PROJECT" \
+          -scheme "$SCHEME" \
+          -configuration Release \
+          -sdk iphonesimulator \
+          -destination 'generic/platform=iOS Simulator' \
+          -derivedDataPath "$DERIVED_DATA" \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          build
+      else
+        xcodebuild \
+          -workspace "$WORKSPACE" \
+          -scheme "$SCHEME" \
+          -configuration Release \
+          -sdk iphonesimulator \
+          -destination 'generic/platform=iOS Simulator' \
+          -derivedDataPath "$DERIVED_DATA" \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          build
+      fi
+  - name: Find app
+    shell: bash
+    run: |
+      set -e
+      APP_PATH="$(find build/Build/Products -type d -name '*.app' -print -quit)"
+      if [ -z "$APP_PATH" ]; then
+        echo "ERROR: No se encontró el .app después de compilar"
+        exit 1
+      fi
+      echo "APP encontrada:"
+      echo "$APP_PATH"
+      mkdir -p artifact
+      cp -R "$APP_PATH" artifact/
+  - name: Upload app
+    uses: actions/upload-artifact@v4
+    with:
+      name: iOS-App
+      path: artifact/
