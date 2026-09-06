@@ -14,69 +14,151 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
+      - name: Find Xcode project
+        id: project
+        shell: bash
         run: |
-          sudo xcode-select -s /Applications/Xcode_26.0.app
-          xcodebuild -version
+          set -e
 
-      - name: Fix missing patch reference
+          PROJECT=$(find . -name "*.xcodeproj" -type d | head -n 1)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No se encontró ningún archivo .xcodeproj"
+            find . -maxdepth 4 -type f | sort | head -200
+            exit 1
+          fi
+
+          echo "Proyecto encontrado: $PROJECT"
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Find scheme
+        id: scheme
+        shell: bash
         run: |
-          python3 <<'PY'
-          from pathlib import Path
+          set -e
 
-          p = Path("ThreeOneOSFive.xcodeproj/project.pbxproj")
-          s = p.read_text()
+          PROJECT="${{ steps.project.outputs.project }}"
 
-          s = s.replace(
-              '84CD697CEF0BFC7524509317 /* AIMBOT PECHO FFTH.3105 in Resources */ = {isa = PBXBuildFile; fileRef = 0ABB3EA4093C0E23CFB36D8B; };\n',
-              ''
-          )
+          SCHEMES=$(xcodebuild \
+            -project "$PROJECT" \
+            -list \
+            | sed -n '/Schemes:/,/^$/p' \
+            | tail -n +2 \
+            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+            | grep -v '^$' \
+            | head -n 1)
 
-          s = s.replace(
-              '\t\t0ABB3EA4093C0E23CFB36D8B /* AIMBOT PECHO FFTH.3105 */ = {isa = PBXFileReference; lastKnownFileType = file; path = "AIMBOT PECHO FFTH.3105"; sourceTree = "<group>"; };\n',
-              ''
-          )
+          if [ -z "$SCHEMES" ]; then
+            echo "ERROR: No se encontró ningún scheme."
+            xcodebuild -project "$PROJECT" -list
+            exit 1
+          fi
 
-          s = s.replace(
-              '\t\t\t\t0ABB3EA4093C0E23CFB36D8B /* AIMBOT PECHO FFTH.3105 */,\n',
-              ''
-          )
+          echo "Scheme encontrado: $SCHEMES"
+          echo "scheme=$SCHEMES" >> "$GITHUB_OUTPUT"
 
-          p.write_text(s)
-          PY
+      - name: Fix patch reference
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="${{ steps.project.outputs.project }}"
+          PBX="$PROJECT/project.pbxproj"
+
+          echo "Revisando: $PBX"
+
+          if grep -q "AIMBOT PECHO FFTH.3105" "$PBX"; then
+            echo "Referencia incorrecta encontrada."
+
+            sed -i '' \
+              's/AIMBOT PECHO FFTH\.3105/AIMBOT PECHO.3105/g' \
+              "$PBX"
+
+            echo "Referencia corregida."
+          else
+            echo "No se encontró la referencia incorrecta. Continuando."
+          fi
+
+      - name: Show project information
+        shell: bash
+        run: |
+          PROJECT="${{ steps.project.outputs.project }}"
+          SCHEME="${{ steps.scheme.outputs.scheme }}"
+
+          echo "PROJECT = $PROJECT"
+          echo "SCHEME  = $SCHEME"
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -showBuildSettings \
+            | grep -E "PRODUCT_NAME|PRODUCT_BUNDLE_IDENTIFIER|TARGET_NAME" \
+            || true
 
       - name: Clean
+        shell: bash
         run: |
+          PROJECT="${{ steps.project.outputs.project }}"
+          SCHEME="${{ steps.scheme.outputs.scheme }}"
+
           xcodebuild clean \
-            -project ThreeOneOSFive.xcodeproj \
-            -scheme 3105 \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -configuration Release
 
       - name: Build archive
+        shell: bash
         run: |
+          set -e
+
+          PROJECT="${{ steps.project.outputs.project }}"
+          SCHEME="${{ steps.scheme.outputs.scheme }}"
+
+          mkdir -p build
+
           xcodebuild archive \
-            -project ThreeOneOSFive.xcodeproj \
-            -scheme 3105 \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -configuration Release \
-            -archivePath "$PWD/build/3105.xcarchive" \
+            -archivePath "$PWD/build/Nraxo.xcarchive" \
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Create unsigned IPA
+      - name: Create IPA
+        shell: bash
         run: |
+          set -e
+
+          APP=$(find "build/Nraxo.xcarchive/Products/Applications" \
+            -maxdepth 1 \
+            -name "*.app" \
+            -type d \
+            | head -n 1)
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: No se encontró la aplicación compilada."
+            find build/Nraxo.xcarchive -maxdepth 5 -type f | head -200
+            exit 1
+          fi
+
+          echo "Aplicación encontrada: $APP"
+
+          rm -rf build/Payload
           mkdir -p build/Payload
 
-          cp -R \
-            build/3105.xcarchive/Products/Applications/3105.app \
-            build/Payload/
+          cp -R "$APP" build/Payload/
 
           cd build
-          zip -r Nraxo.ipa Payload
+          zip -qry Nraxo.ipa Payload
 
-      - name: Upload IPA
+          echo "IPA creada:"
+          ls -lh Nraxo.ipa
+
+      - name: Upload Nraxo IPA
         uses: actions/upload-artifact@v4
         with:
           name: Nraxo-IPA
           path: build/Nraxo.ipa
+          if-no-files-found: error
