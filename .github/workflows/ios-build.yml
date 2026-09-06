@@ -1,4 +1,4 @@
-name: Build 3105 IPA
+name: Build 3105 iOS
 
 on:
   workflow_dispatch:
@@ -8,169 +8,113 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
-      - name: Descargar repositorio
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Descomprimir proyecto
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - name: Verify required patch files
+        working-directory: 3105-main
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          mkdir -p "$RUNNER_TEMP/source"
+          SEED="ThreeOneOSFive/SeedPatches"
 
-          ZIP=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name "3105-with-github-actions.zip" -print -quit)
+          test -f "$SEED/AIMBOT BODY FFTH.3105"
+          test -f "$SEED/AIMBOT BODY FFMX.3105"
 
-          if [ -n "$ZIP" ]; then
-            echo "ZIP encontrado:"
-            echo "$ZIP"
+          echo "FFTH patch:"
+          shasum -a 256 "$SEED/AIMBOT BODY FFTH.3105"
 
-            unzip -q "$ZIP" -d "$RUNNER_TEMP/source"
-          else
-            echo "No se encontró el ZIP."
-            echo "Buscando proyecto directamente..."
+          echo "FFMX patch:"
+          shasum -a 256 "$SEED/AIMBOT BODY FFMX.3105"
 
-            cp -R "$GITHUB_WORKSPACE"/* "$RUNNER_TEMP/source/" 2>/dev/null || true
-          fi
-
-          echo "Contenido:"
-          find "$RUNNER_TEMP/source" -maxdepth 3 -print
-
-      - name: Encontrar Xcode project
+      - name: Create BODY/CHEST patch aliases
+        working-directory: 3105-main
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          PROJECT=$(find "$RUNNER_TEMP/source" \
-            -type d \
-            -name "ThreeOneOSFive.xcodeproj" \
-            -print -quit)
+          SEED="ThreeOneOSFive/SeedPatches"
 
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró ThreeOneOSFive.xcodeproj"
-            find "$RUNNER_TEMP/source" -type d -name "*.xcodeproj" -print
+          # FFTH:
+          # BODY and CHEST MUST use the exact same FFTH patch.
+          cp -f \
+            "$SEED/AIMBOT BODY FFTH.3105" \
+            "$SEED/AIMBOT CHEST FFTH.3105"
+
+          # FFMX:
+          # BODY and CHEST MUST use the exact same FFMX patch.
+          cp -f \
+            "$SEED/AIMBOT BODY FFMX.3105" \
+            "$SEED/AIMBOT CHEST FFMX.3105"
+
+      - name: Verify BODY == CHEST
+        working-directory: 3105-main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SEED="ThreeOneOSFive/SeedPatches"
+
+          FFTH_BODY=$(shasum -a 256 "$SEED/AIMBOT BODY FFTH.3105" | awk '{print $1}')
+          FFTH_CHEST=$(shasum -a 256 "$SEED/AIMBOT CHEST FFTH.3105" | awk '{print $1}')
+
+          FFMX_BODY=$(shasum -a 256 "$SEED/AIMBOT BODY FFMX.3105" | awk '{print $1}')
+          FFMX_CHEST=$(shasum -a 256 "$SEED/AIMBOT CHEST FFMX.3105" | awk '{print $1}')
+
+          if [ "$FFTH_BODY" != "$FFTH_CHEST" ]; then
+            echo "ERROR: FFTH BODY y CHEST no usan el mismo patch."
             exit 1
           fi
 
-          echo "================================="
-          echo "PROYECTO ENCONTRADO:"
-          echo "$PROJECT"
-          echo "================================="
-
-          echo "PROJECT_PATH=$PROJECT" >> "$GITHUB_ENV"
-
-      - name: Mostrar versión de Xcode
-        run: |
-          xcodebuild -version
-
-      - name: Verificar proyecto y Scheme
-        run: |
-          set -e
-
-          xcodebuild \
-            -project "$PROJECT_PATH" \
-            -list
-
-      - name: Preparar SeedPatches
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT_DIR="$(dirname "$PROJECT_PATH")"
-          PATCH_DIR="$PROJECT_DIR/ThreeOneOSFive/SeedPatches"
-
-          if [ -d "$PATCH_DIR" ]; then
-            echo "SeedPatches encontrado:"
-            ls -la "$PATCH_DIR"
-
-            # Correcciones de nombres si son necesarias
-            if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
-               [ ! -f "$PATCH_DIR/AIMBOT PECHO FFTH.3105" ]; then
-              cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
-                 "$PATCH_DIR/AIMBOT PECHO FFTH.3105"
-            fi
-
-            if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
-               [ ! -f "$PATCH_DIR/AIMBOT CHETS FFTH.3105" ]; then
-              cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
-                 "$PATCH_DIR/AIMBOT CHETS FFTH.3105"
-            fi
-
-            if [ -f "$PATCH_DIR/AIMBOT CHEST FFMX.3105" ] && \
-               [ ! -f "$PATCH_DIR/AIMBOT CHEST  FFMX.3105" ]; then
-              cp "$PATCH_DIR/AIMBOT CHEST FFMX.3105" \
-                 "$PATCH_DIR/AIMBOT CHEST  FFMX.3105"
-            fi
+          if [ "$FFMX_BODY" != "$FFMX_CHEST" ]; then
+            echo "ERROR: FFMX BODY y CHEST no usan el mismo patch."
+            exit 1
           fi
 
-      - name: Compilar 3105
+          echo "OK: FFTH BODY == FFTH CHEST"
+          echo "OK: FFMX BODY == FFMX CHEST"
+
+      - name: Fix incorrect patch reference names
+        working-directory: 3105-main
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          rm -rf "$RUNNER_TEMP/DerivedData"
-          rm -rf "$RUNNER_TEMP/3105-build"
+          PROJECT="ThreeOneOSFive.xcodeproj/project.pbxproj"
 
-          mkdir -p "$RUNNER_TEMP/3105-build"
+          sed -i '' \
+            's/AIMBOT CHETS FFTH/AIMBOT CHEST FFTH/g' \
+            "$PROJECT"
 
+          sed -i '' \
+            's/AIMBOT CHEST  FFMX/AIMBOT CHEST FFMX/g' \
+            "$PROJECT"
+
+      - name: Show final Aimbot patches
+        working-directory: 3105-main
+        shell: bash
+        run: |
+          echo "=== AIMBOT PATCHES ==="
+          ls -lh ThreeOneOSFive/SeedPatches/*AIMBOT*3105
+
+      - name: Build
+        working-directory: 3105-main
+        run: |
           xcodebuild \
-            -project "$PROJECT_PATH" \
-            -scheme "3105" \
-            -configuration "Release" \
+            -project ThreeOneOSFive.xcodeproj \
+            -scheme 3105 \
+            -configuration Release \
             -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/3105-build" \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
-
-      - name: Buscar APP
-        shell: bash
-        run: |
-          set -e
-
-          APP=$(find "$RUNNER_TEMP/3105-build" \
-            -type d \
-            -name "*.app" \
-            -print -quit)
-
-          if [ -z "$APP" ]; then
-            echo "ERROR: No se encontró ningún .app"
-            find "$RUNNER_TEMP/3105-build" -maxdepth 4 -print
-            exit 1
-          fi
-
-          echo "APP encontrado:"
-          echo "$APP"
-
-          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
-
-      - name: Crear IPA
-        shell: bash
-        run: |
-          set -e
-
-          rm -rf "$RUNNER_TEMP/Payload"
-          mkdir -p "$RUNNER_TEMP/Payload"
-
-          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/3105.app"
-
-          cd "$RUNNER_TEMP"
-
-          zip -r -q "3105.ipa" Payload
-
-          echo "================================="
-          echo "IPA CREADO"
-          echo "================================="
-
-          ls -lh "$RUNNER_TEMP/3105.ipa"
-
-      - name: Subir IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: 3105-ipa
-          path: ${{ runner.temp }}/3105.ipa
-          if-no-files-found: error
