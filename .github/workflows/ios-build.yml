@@ -1,114 +1,127 @@
-name: iOS Build
+name: Build 3105 IPA
 
 on:
-workflow_dispatch:
-push:
-branches:
-- main
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-build:
-runs-on: macos-latest
+  build:
+    runs-on: macos-latest
 
-steps:
-  - name: Checkout
-    uses: actions/checkout@v4
-  - name: Prepare project
-    shell: bash
-    run: |
-      set -e
-      echo "Contenido inicial:"
-      ls -la
-      ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-      if [ -z "$ZIP_FILE" ]; then
-        echo "ERROR: No se encontró ningún archivo .zip"
-        exit 1
-      fi
-      echo "ZIP encontrado: $ZIP_FILE"
-      mkdir -p extracted
-      unzip -o "$ZIP_FILE" -d extracted
-      echo "Buscando archivos Xcode..."
-      PROJECT="$(find "$GITHUB_WORKSPACE/extracted" -type d -name '*.xcodeproj' -print -quit)"
-      WORKSPACE="$(find "$GITHUB_WORKSPACE/extracted" -type d -name '*.xcworkspace' -print -quit)"
-      if [ -n "$PROJECT" ]; then
-        echo "Xcode project encontrado:"
-        echo "$PROJECT"
-        echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-      elif [ -n "$WORKSPACE" ]; then
-        echo "Xcode workspace encontrado:"
-        echo "$WORKSPACE"
-        echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-      else
-        echo "ERROR: Después de descomprimir el ZIP no se encontró ningún .xcodeproj ni .xcworkspace"
-        echo ""
-        echo "Archivos encontrados:"
-        find "$GITHUB_WORKSPACE/extracted" -maxdepth 5 -type f | head -200
-        exit 1
-      fi
-  - name: Detect scheme
-    shell: bash
-    run: |
-      set -e
-      if [ -n "${PROJECT:-}" ]; then
-        echo "Analizando proyecto:"
-        xcodebuild -list -project "$PROJECT"
-        SCHEME="$(xcodebuild -list -project "$PROJECT" 2>/dev/null \
-          | awk '/Schemes:/ {found=1; next} found && NF {gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}')"
-      else
-        echo "Analizando workspace:"
-        xcodebuild -list -workspace "$WORKSPACE"
-        SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" 2>/dev/null \
-          | awk '/Schemes:/ {found=1; next} found && NF {gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}')"
-      fi
-      if [ -z "$SCHEME" ]; then
-        echo "ERROR: No se pudo detectar ningún Scheme de Xcode"
-        exit 1
-      fi
-      echo "Scheme detectado: $SCHEME"
-      echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-  - name: Build iOS
-    shell: bash
-    run: |
-      set -e
-      DERIVED_DATA="$GITHUB_WORKSPACE/build"
-      if [ -n "${PROJECT:-}" ]; then
-        xcodebuild \
-          -project "$PROJECT" \
-          -scheme "$SCHEME" \
-          -configuration Release \
-          -sdk iphonesimulator \
-          -destination 'generic/platform=iOS Simulator' \
-          -derivedDataPath "$DERIVED_DATA" \
-          CODE_SIGNING_ALLOWED=NO \
-          CODE_SIGNING_REQUIRED=NO \
-          build
-      else
-        xcodebuild \
-          -workspace "$WORKSPACE" \
-          -scheme "$SCHEME" \
-          -configuration Release \
-          -sdk iphonesimulator \
-          -destination 'generic/platform=iOS Simulator' \
-          -derivedDataPath "$DERIVED_DATA" \
-          CODE_SIGNING_ALLOWED=NO \
-          CODE_SIGNING_REQUIRED=NO \
-          build
-      fi
-  - name: Find app
-    shell: bash
-    run: |
-      set -e
-      APP_PATH="$(find build/Build/Products -type d -name '*.app' -print -quit)"
-      if [ -z "$APP_PATH" ]; then
-        echo "ERROR: No se encontró el .app después de compilar"
-        exit 1
-      fi
-      echo "APP encontrada:"
-      echo "$APP_PATH"
-      mkdir -p artifact
-      cp -R "$APP_PATH" artifact/
-  - name: Upload app
-    uses: actions/upload-artifact@v4
-    with:
-      name: iOS-App
-      path: artifact/
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare project
+        shell: bash
+        run: |
+          set -e
+
+          # Si el proyecto viene dentro del ZIP, lo descomprimimos
+          if [ -f "3105-with-github-actions.zip" ]; then
+            echo "ZIP encontrado. Descomprimiendo..."
+            mkdir -p "$RUNNER_TEMP/3105-source"
+            unzip -q "3105-with-github-actions.zip" -d "$RUNNER_TEMP/3105-source"
+            SEARCH_ROOT="$RUNNER_TEMP/3105-source"
+          else
+            echo "No hay ZIP. Buscando proyecto directamente..."
+            SEARCH_ROOT="$GITHUB_WORKSPACE"
+          fi
+
+          echo "Buscando ThreeOneOSFive.xcodeproj..."
+
+          PROJECT=$(find "$SEARCH_ROOT" \
+            -name "ThreeOneOSFive.xcodeproj" \
+            -type d \
+            -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No se encontró ThreeOneOSFive.xcodeproj"
+            find "$SEARCH_ROOT" -maxdepth 4 -type d -name "*.xcodeproj" -print
+            exit 1
+          fi
+
+          echo "Proyecto encontrado:"
+          echo "$PROJECT"
+
+          echo "PROJECT_PATH=$PROJECT" >> "$GITHUB_ENV"
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+
+      - name: Check scheme
+        run: |
+          set -e
+
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -list
+
+      - name: Build 3105
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf "$RUNNER_TEMP/3105-build"
+          mkdir -p "$RUNNER_TEMP/3105-build"
+
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -scheme "3105" \
+            -configuration "Release" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/3105-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Find application
+        shell: bash
+        run: |
+          set -e
+
+          APP=$(find "$RUNNER_TEMP/3105-build" \
+            -maxdepth 2 \
+            -name "*.app" \
+            -type d \
+            -print -quit)
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: No se encontró el .app"
+            find "$RUNNER_TEMP/3105-build" -maxdepth 3 -print
+            exit 1
+          fi
+
+          echo "APP encontrado:"
+          echo "$APP"
+
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
+
+      - name: Create IPA
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf "$RUNNER_TEMP/Payload"
+          mkdir -p "$RUNNER_TEMP/Payload"
+
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+
+          cd "$RUNNER_TEMP"
+
+          zip -r "3105.ipa" Payload
+
+          echo "IPA creado:"
+          ls -lh "$RUNNER_TEMP/3105.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3105-ipa
+          path: ${{ runner.temp }}/3105.ipa
+          if-no-files-found: error
