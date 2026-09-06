@@ -12,33 +12,67 @@ jobs:
     name: Build IPA
     runs-on: macos-15
 
-    defaults:
-      run:
-        working-directory: 3105-main
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Show project structure
+        run: |
+          echo "Directorio actual:"
+          pwd
+
+          echo ""
+          echo "Contenido:"
+          ls -la
+
+          echo ""
+          echo "Buscando proyectos Xcode:"
+          find . -name "*.xcodeproj" -type d
+          
+          echo ""
+          echo "Buscando workspace:"
+          find . -name "*.xcworkspace" -type d
+
       - name: Select Xcode
         run: |
+          echo "Xcode disponible:"
+          ls -d /Applications/Xcode*.app || true
+
           sudo xcode-select -s /Applications/Xcode_16.4.app
+
           xcodebuild -version
 
-      - name: Clean
+      - name: Find Xcode project
+        id: project
         run: |
-          xcodebuild clean \
-            -project ThreeOneOSFive.xcodeproj \
-            -scheme ThreeOneOSFive \
-            -configuration Release \
-            -sdk iphoneos \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+          PROJECT=$(find . -name "*.xcodeproj" -type d | head -n 1)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No se encontró ningún archivo .xcodeproj"
+            exit 1
+          fi
+
+          echo "Proyecto encontrado:"
+          echo "$PROJECT"
+
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Show schemes
+        run: |
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -list
 
       - name: Build
         run: |
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          mkdir -p build
+
           xcodebuild \
-            -project ThreeOneOSFive.xcodeproj \
+            -project "$PROJECT" \
             -scheme ThreeOneOSFive \
             -configuration Release \
             -sdk iphoneos \
@@ -51,27 +85,33 @@ jobs:
         run: |
           mkdir -p Payload
 
-          APP_PATH=$(find build/Build/Products/Release-iphoneos \
-            -maxdepth 1 \
+          APP_PATH=$(find build/Build/Products \
             -name "*.app" \
             -type d \
             | head -n 1)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No se encontró el .app"
-            find build -type d -name "*.app"
+            echo "ERROR: No se encontró el archivo .app"
+            echo ""
+            echo "Archivos encontrados:"
+            find build -type f | head -100
             exit 1
           fi
 
-          echo "App encontrada: $APP_PATH"
+          echo "APP encontrada:"
+          echo "$APP_PATH"
+
           cp -R "$APP_PATH" Payload/
 
-          rm -f Nraxo-unsigned.ipa
           zip -r Nraxo-unsigned.ipa Payload
+
+          echo ""
+          echo "IPA creada:"
+          ls -lh Nraxo-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: Nraxo-unsigned-IPA
-          path: 3105-main/Nraxo-unsigned.ipa
+          path: Nraxo-unsigned.ipa
           if-no-files-found: error
