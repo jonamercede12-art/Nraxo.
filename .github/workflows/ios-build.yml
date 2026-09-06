@@ -2,117 +2,104 @@ name: Build iOS IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
 
 jobs:
   build:
-    name: Build IPA
+    name: Build 3105 IPA
     runs-on: macos-15
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show repository
+      - name: Verify project files
         run: |
-          echo "Directorio:"
+          echo "Repository:"
           pwd
 
-          echo "Archivos del repositorio:"
-          find . -maxdepth 3 -print | sort
+          echo ""
+          echo "Contenido:"
+          ls -la
 
-      - name: Find Xcode project
-        id: project
+          echo ""
+          echo "Contenido de 3105-main:"
+          ls -la 3105-main
+
+          echo ""
+          echo "Comprobando Xcode project:"
+          test -f "3105-main/ThreeOneOSFive.xcodeproj/project.pbxproj"
+
+      - name: Show Xcode version
         run: |
-          PROJECT=$(find "$GITHUB_WORKSPACE" \
-            -name "*.xcodeproj" \
-            -type d \
-            -print -quit)
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró ningún .xcodeproj"
-            echo ""
-            echo "Contenido del repositorio:"
-            find "$GITHUB_WORKSPACE" -maxdepth 5 -print
-            exit 1
-          fi
-
-          echo "Proyecto encontrado:"
-          echo "$PROJECT"
-
-          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
-
-      - name: Select Xcode
-        run: |
-          echo "Xcode instalado:"
-          ls -d /Applications/Xcode*.app
-
-          XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
-
-          echo "Usando:"
-          echo "$XCODE"
-
-          sudo xcode-select -s "$XCODE"
-
           xcodebuild -version
+          xcode-select -p
 
-      - name: List project
+      - name: Show targets
+        working-directory: 3105-main
         run: |
-          PROJECT="${{ steps.project.outputs.project }}"
-
           xcodebuild \
-            -project "$PROJECT" \
+            -project ThreeOneOSFive.xcodeproj \
             -list
 
-      - name: Build
+      - name: Build iOS app
+        working-directory: 3105-main
         run: |
-          PROJECT="${{ steps.project.outputs.project }}"
-
-          mkdir -p "$GITHUB_WORKSPACE/build"
+          rm -rf build
 
           xcodebuild \
-            -project "$PROJECT" \
-            -scheme ThreeOneOSFive \
+            -project ThreeOneOSFive.xcodeproj \
+            -target 3105 \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath "$GITHUB_WORKSPACE/build" \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Create IPA
+      - name: Locate application
+        working-directory: 3105-main
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/Payload"
+          echo "Buscando 3105.app..."
 
-          APP_PATH=$(find "$GITHUB_WORKSPACE/build/Build/Products" \
-            -name "*.app" \
+          find build \
             -type d \
+            -name "3105.app" \
+            -print
+
+          APP_PATH=$(find build \
+            -type d \
+            -name "3105.app" \
             -print -quit)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No se encontró el .app"
-            find "$GITHUB_WORKSPACE/build" -print
+            echo "ERROR: 3105.app no fue generado."
             exit 1
           fi
 
-          echo "App encontrada:"
-          echo "$APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
-          cp -R "$APP_PATH" "$GITHUB_WORKSPACE/Payload/"
+      - name: Create IPA
+        working-directory: 3105-main
+        run: |
+          rm -rf Payload
+          mkdir -p Payload
 
-          cd "$GITHUB_WORKSPACE"
+          cp -R "$APP_PATH" Payload/3105.app
 
-          zip -r Nraxo.ipa Payload
+          rm -f 3105.ipa
 
-          echo "IPA creada:"
-          ls -lh Nraxo.ipa
+          /usr/bin/zip \
+            -qry \
+            3105.ipa \
+            Payload
+
+          echo ""
+          echo "IPA generada:"
+          ls -lh 3105.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Nraxo-IPA
-          path: Nraxo.ipa
+          name: 3105-IPA
+          path: 3105-main/3105.ipa
           if-no-files-found: error
