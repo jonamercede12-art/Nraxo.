@@ -14,7 +14,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract project
+      - name: Prepare project
         shell: bash
         run: |
           set -euo pipefail
@@ -22,42 +22,46 @@ jobs:
           rm -rf project build
           mkdir -p project build
 
-          if [ ! -f "3105-with-github-actions.zip" ]; then
-            echo "ERROR: No se encontró 3105-with-github-actions.zip"
+          ZIP_FILE="3105-with-github-actions.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: No se encontró $ZIP_FILE"
             exit 1
           fi
 
-          unzip -q "3105-with-github-actions.zip" -d project
+          echo "Extrayendo proyecto..."
+          unzip -q "$ZIP_FILE" -d project
 
-          echo "Proyecto extraído correctamente."
+          echo "Contenido extraído:"
+          find project -maxdepth 4 -type f | head -200
 
       - name: Find Xcode project
         shell: bash
         run: |
           set -euo pipefail
 
-          PROJECT=$(find "$GITHUB_WORKSPACE/project" \
-            -name "*.xcodeproj" \
-            -type d \
-            | head -n 1)
+          PROJECT_PATH="$(find "$GITHUB_WORKSPACE/project" -name "*.xcodeproj" -type d | head -n 1)"
 
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró ningún .xcodeproj"
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "ERROR: No se encontró ningún archivo .xcodeproj"
+            find "$GITHUB_WORKSPACE/project" -maxdepth 6 -print
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$PROJECT")
+          PROJECT_DIR="$(dirname "$PROJECT_PATH")"
 
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          echo "PROJECT=$PROJECT_PATH" >> "$GITHUB_ENV"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "PROJECT:"
-          echo "$PROJECT"
+          echo "Proyecto encontrado:"
+          echo "$PROJECT_PATH"
 
       - name: Apply patches
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "Buscando patches..."
 
           PATCH_LIST="/tmp/patches.txt"
           : > "$PATCH_LIST"
@@ -68,201 +72,168 @@ jobs:
             -print > "$PATCH_LIST" || true
 
           if [ ! -s "$PATCH_LIST" ]; then
-            echo "No hay patches para aplicar."
-          else
-            while IFS= read -r PATCH; do
-              [ -z "$PATCH" ] && continue
-
-              echo "Procesando patch:"
-              echo "$PATCH"
-
-              cd "$PROJECT_DIR"
-
-              if git apply --check "$PATCH" >/dev/null 2>&1; then
-                git apply "$PATCH"
-                echo "Patch aplicado con git apply."
-              elif patch --dry-run -p1 < "$PATCH" >/dev/null 2>&1; then
-                patch -p1 < "$PATCH"
-                echo "Patch aplicado con patch -p1."
-              else
-                echo "Patch no aplicable; se continúa."
-              fi
-            done < "$PATCH_LIST"
+            echo "No se encontraron archivos .patch o .diff."
+            exit 0
           fi
 
-      - name: Remove Aimbot Pecho and Body menu entries
+          echo "Patches encontrados:"
+          cat "$PATCH_LIST"
+
+          while IFS= read -r PATCH; do
+            [ -z "$PATCH" ] && continue
+
+            echo ""
+            echo "========================================"
+            echo "Aplicando patch:"
+            echo "$PATCH"
+            echo "========================================"
+
+            cd "$PROJECT_DIR"
+
+            if git apply --check "$PATCH" >/dev/null 2>&1; then
+              echo "Aplicando con git apply..."
+              git apply "$PATCH"
+              continue
+            fi
+
+            echo "git apply no pudo aplicar el patch."
+            echo "Intentando con patch -p1..."
+
+            if patch --dry-run -p1 < "$PATCH" >/dev/null 2>&1; then
+              patch -p1 < "$PATCH"
+              continue
+            fi
+
+            echo "ERROR: No se pudo aplicar:"
+            echo "$PATCH"
+            exit 1
+
+          done < "$PATCH_LIST"
+
+          echo "Todos los patches aplicables fueron procesados."
+
+      - name: Remove Aimbot Pecho and Body options
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Buscando archivos de código..."
+          echo "Buscando referencias a 'Aimbot Pecho' y 'Body'..."
 
-          FILES=$(find "$PROJECT_DIR" \
-            -type f \
-            \( \
-              -name "*.swift" \
-              -o -name "*.m" \
-              -o -name "*.mm" \
-              -o -name "*.h" \
-              -o -name "*.plist" \
-              -o -name "*.json" \
-              -o -name "*.xml" \
-              -o -name "*.strings" \
-            \) \
-            -not -path "*/.git/*")
+          SEARCH_ROOT="$PROJECT_DIR"
 
-          echo "Buscando referencias exactas..."
+          if grep -RniE \
+            --exclude-dir=".git" \
+            --exclude="*.xcuserstate" \
+            --exclude="project.pbxproj" \
+            --exclude="*.plist" \
+            "Aimbot Pecho|AimbotPecho|aimbot pecho|Body" \
+            "$SEARCH_ROOT" > /tmp/aimbot_body_refs.txt 2>/dev/null; then
 
-          FOUND=0
+            echo "Se encontraron referencias:"
+            cat /tmp/aimbot_body_refs.txt
 
-          while IFS= read -r FILE; do
-            [ -z "$FILE" ] && continue
-
-            if grep -qEi \
-              "Aimbot Pecho|AimbotPecho|Aimbot_Pecho|aimbot pecho" \
-              "$FILE" 2>/dev/null; then
-
-              echo ""
-              echo "Encontrado Aimbot Pecho en:"
-              echo "$FILE"
-
-              FOUND=1
-            fi
-
-          done <<< "$FILES"
-
-          echo ""
-          echo "Buscando entrada exacta Body..."
-
-          while IFS= read -r FILE; do
-            [ -z "$FILE" ] && continue
-
-            if grep -qE \
-              '["'\'']Body["'\'']|Text[[:space:]]*=[[:space:]]*["'\'']Body["'\'']|title[[:space:]]*[:=][[:space:]]*["'\'']Body["'\'']' \
-              "$FILE" 2>/dev/null; then
-
-              echo ""
-              echo "Encontrada entrada de menú Body en:"
-              echo "$FILE"
-
-              FOUND=1
-            fi
-
-          done <<< "$FILES"
-
-          if [ "$FOUND" -eq 0 ]; then
             echo ""
-            echo "No se encontraron las entradas mediante búsqueda de texto."
-            echo "El proyecto puede estar generando esas opciones desde otra estructura."
+            echo "IMPORTANTE:"
+            echo "No se modificarán automáticamente archivos de código."
+            echo "Las opciones deben eliminarse mediante los patches del proyecto."
+          else
+            echo "No se encontraron referencias directas."
           fi
-
-          echo ""
-          echo "Eliminando únicamente etiquetas visibles conocidas..."
-
-          while IFS= read -r FILE; do
-            [ -z "$FILE" ] && continue
-
-            case "$FILE" in
-              *.swift|*.m|*.mm|*.h|*.strings)
-                if grep -q "Aimbot Pecho" "$FILE" 2>/dev/null; then
-                  sed -i '' '/Aimbot Pecho/d' "$FILE"
-                  echo "Eliminada línea de Aimbot Pecho: $FILE"
-                fi
-                ;;
-            esac
-
-          done <<< "$FILES"
-
-          echo ""
-          echo "Limpieza de etiquetas completada."
 
       - name: Select Xcode
         shell: bash
         run: |
           set -euo pipefail
 
-          XCODE_PATH="/Applications/Xcode_26.6.app/Contents/Developer"
-
-          if [ ! -d "$XCODE_PATH" ]; then
-            XCODE_PATH="/Applications/Xcode.app/Contents/Developer"
-          fi
-
-          sudo xcode-select -s "$XCODE_PATH"
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
           xcodebuild -version
+          swift --version
 
       - name: Detect workspace or project
         shell: bash
         run: |
           set -euo pipefail
 
-          WORKSPACE=$(find "$PROJECT_DIR" \
-            -maxdepth 2 \
-            -name "*.xcworkspace" \
-            -type d \
-            | head -n 1 || true)
+          WORKSPACE_PATH="$(find "$PROJECT_DIR" -maxdepth 2 -name "*.xcworkspace" -type d | head -n 1 || true)"
 
-          if [ -n "$WORKSPACE" ]; then
+          if [ -n "$WORKSPACE_PATH" ]; then
             echo "BUILD_CONTAINER=-workspace" >> "$GITHUB_ENV"
-            echo "BUILD_PATH=$WORKSPACE" >> "$GITHUB_ENV"
+            echo "BUILD_PATH=$WORKSPACE_PATH" >> "$GITHUB_ENV"
+            echo "Usando workspace:"
+            echo "$WORKSPACE_PATH"
           else
             echo "BUILD_CONTAINER=-project" >> "$GITHUB_ENV"
             echo "BUILD_PATH=$PROJECT" >> "$GITHUB_ENV"
+            echo "Usando project:"
+            echo "$PROJECT"
           fi
 
-      - name: Verify project
+      - name: Detect scheme
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "Obteniendo schemes disponibles..."
 
           xcodebuild \
             "$BUILD_CONTAINER" "$BUILD_PATH" \
             -list
 
-      - name: Set scheme
-        shell: bash
-        run: |
-          set -euo pipefail
+          SCHEME="$(
+            xcodebuild "$BUILD_CONTAINER" "$BUILD_PATH" -list 2>/dev/null |
+            awk '
+              /Schemes:/ {
+                found=1
+                next
+              }
+              found && NF {
+                gsub(/^[ \t]+|[ \t]+$/, "", $0)
+                print
+                exit
+              }
+            '
+          )"
 
-          SCHEME="3105"
+          if [ -z "$SCHEME" ]; then
+            SCHEME="3105"
+          fi
 
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
 
-          echo "Scheme: $SCHEME"
+          echo "Scheme seleccionado:"
+          echo "$SCHEME"
 
-      - name: Clean
+      - name: Clean build
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf "$GITHUB_WORKSPACE/build/DerivedData"
-
-          mkdir -p "$GITHUB_WORKSPACE/build/DerivedData"
+          mkdir -p build/DerivedData
 
           xcodebuild \
             "$BUILD_CONTAINER" "$BUILD_PATH" \
             -scheme "$SCHEME" \
-            -configuration Release \
             -sdk iphoneos \
+            -configuration Release \
             -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
             clean
 
-      - name: Build
+      - name: Build unsigned iOS app
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Compilando 3105..."
+          mkdir -p build/DerivedData
 
           xcodebuild \
             "$BUILD_CONTAINER" "$BUILD_PATH" \
             -scheme "$SCHEME" \
-            -configuration Release \
             -sdk iphoneos \
+            -configuration Release \
             -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -271,26 +242,32 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Find app
+      - name: Find generated app
         shell: bash
         run: |
           set -euo pipefail
 
-          APP_PATH=$(find \
-            "$GITHUB_WORKSPACE/build/DerivedData" \
-            -type d \
-            -name "*.app" \
-            -path "*/Build/Products/Release-iphoneos/*" \
-            | head -n 1)
+          echo "Buscando .app generado..."
+
+          APP_PATH="$(
+            find "$GITHUB_WORKSPACE/build/DerivedData" \
+              -type d \
+              -name "*.app" \
+              -path "*/Build/Products/Release-iphoneos/*" \
+              | head -n 1
+          )"
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No se encontró el .app."
+            echo "ERROR: No se encontró el .app generado."
+            echo ""
+            echo "Contenido de DerivedData:"
+            find "$GITHUB_WORKSPACE/build/DerivedData" -maxdepth 8 -print | head -300
             exit 1
           fi
 
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
-          echo "APP:"
+          echo "Aplicación encontrada:"
           echo "$APP_PATH"
 
       - name: Create IPA
@@ -298,28 +275,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          rm -rf "$GITHUB_WORKSPACE/build/Payload"
+          rm -rf build/Payload
+          mkdir -p build/Payload
 
-          mkdir -p "$GITHUB_WORKSPACE/build/Payload"
+          echo "Copiando aplicación..."
 
-          cp -R "$APP_PATH" \
-            "$GITHUB_WORKSPACE/build/Payload/"
+          cp -R "$APP_PATH" build/Payload/
 
-          cd "$GITHUB_WORKSPACE/build"
+          echo "Creando IPA..."
 
-          zip -qry "3105.ipa" "Payload"
+          cd build
 
-          if [ ! -f "3105.ipa" ]; then
-            echo "ERROR: No se creó el IPA."
+          /usr/bin/zip \
+            -qry \
+            3105.ipa \
+            Payload
+
+          cd ..
+
+          if [ ! -f "build/3105.ipa" ]; then
+            echo "ERROR: No se pudo crear el IPA."
             exit 1
           fi
 
           echo ""
           echo "========================================"
-          echo "IPA CREADO"
+          echo "IPA CREADO CORRECTAMENTE"
           echo "========================================"
 
-          ls -lh "3105.ipa"
+          ls -lh build/3105.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -328,7 +312,7 @@ jobs:
           path: build/3105.ipa
           if-no-files-found: error
 
-      - name: Upload build files
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
