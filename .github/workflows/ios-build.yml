@@ -11,29 +11,69 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Detect iOS project
+      - name: Prepare project from ZIP
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "Directorio actual:"
-          pwd
+          ZIP_FILE="3105-with-github-actions.zip"
 
-          echo "Contenido:"
-          ls -la
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: No se encontró $ZIP_FILE"
+            exit 1
+          fi
+
+          echo "Extrayendo proyecto..."
+
+          mkdir -p project
+
+          unzip -o "$ZIP_FILE" -d project
 
           echo ""
-          echo "Buscando proyectos iOS..."
+          echo "Contenido extraído:"
+          find project -maxdepth 5 -print | head -500
 
-          find . \
-            -type f \
-            \( -name "*.xcodeproj" -o -name "*.xcworkspace" -o -name "Package.swift" \) \
+      - name: Locate iOS project
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Buscando .xcodeproj y .xcworkspace..."
+
+          PROJECT=$(find project \
+            -type d \
+            -name "*.xcodeproj" \
             -not -path "*/Pods/*" \
             -not -path "*/DerivedData/*" \
-            -print
+            | head -n 1)
+
+          WORKSPACE=$(find project \
+            -type d \
+            -name "*.xcworkspace" \
+            -not -path "*/Pods/*" \
+            -not -path "*/DerivedData/*" \
+            | head -n 1)
+
+          if [ -n "$WORKSPACE" ]; then
+            echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+            echo "Encontrado workspace:"
+            echo "$WORKSPACE"
+
+          elif [ -n "$PROJECT" ]; then
+            echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+            echo "Encontrado proyecto:"
+            echo "$PROJECT"
+
+          else
+            echo "ERROR: El ZIP fue extraído pero no contiene .xcodeproj ni .xcworkspace."
+            echo ""
+            echo "Archivos encontrados:"
+            find project -type f | sort
+            exit 1
+          fi
 
       - name: Select Xcode
         shell: bash
@@ -42,37 +82,7 @@ jobs:
 
           sudo xcode-select -s /Applications/Xcode.app
 
-          echo "Xcode:"
           xcodebuild -version
-
-      - name: Find Xcode project
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          PROJECT=$(find . -type f -name "*.xcodeproj" \
-            -not -path "*/Pods/*" \
-            -not -path "*/DerivedData/*" \
-            | head -n 1)
-
-          WORKSPACE=$(find . -type f -name "*.xcworkspace" \
-            -not -path "*/Pods/*" \
-            -not -path "*/DerivedData/*" \
-            | head -n 1)
-
-          if [ -n "$WORKSPACE" ]; then
-            echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-            echo "Encontrado workspace: $WORKSPACE"
-          elif [ -n "$PROJECT" ]; then
-            echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-            echo "Encontrado proyecto: $PROJECT"
-          else
-            echo "ERROR: No se encontró ningún .xcodeproj ni .xcworkspace."
-            echo ""
-            echo "Estructura del proyecto:"
-            find . -maxdepth 4 -print
-            exit 1
-          fi
 
       - name: Show schemes
         shell: bash
@@ -88,3 +98,80 @@ jobs:
               -project "$PROJECT" \
               -list
           fi
+
+      - name: Prepare patches
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Buscando patches..."
+
+          find project \
+            -type f \
+            \( -name "*.patch" -o -name "*.diff" \) \
+            -print
+
+          echo "Patch preparation completed."
+
+      - name: Build iOS project
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if [ -n "${WORKSPACE:-}" ]; then
+
+            SCHEME=$(xcodebuild \
+              -workspace "$WORKSPACE" \
+              -list \
+              | awk '/Schemes:/ {found=1; next} found && NF {print $1; exit}')
+
+            if [ -z "$SCHEME" ]; then
+              echo "ERROR: No se encontró ningún Scheme."
+              exit 1
+            fi
+
+            echo "Scheme detectado: $SCHEME"
+
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath "$PWD/build/App.xcarchive" \
+              archive
+
+          else
+
+            SCHEME=$(xcodebuild \
+              -project "$PROJECT" \
+              -list \
+              | awk '/Schemes:/ {found=1; next} found && NF {print $1; exit}')
+
+            if [ -z "$SCHEME" ]; then
+              echo "ERROR: No se encontró ningún Scheme."
+              exit 1
+            fi
+
+            echo "Scheme detectado: $SCHEME"
+
+            xcodebuild \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath "$PWD/build/App.xcarchive" \
+              archive
+          fi
+
+      - name: Show archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if [ ! -d "build/App.xcarchive" ]; then
+            echo "ERROR: No se generó el archive."
+            exit 1
+          fi
+
+          echo "Archive generado correctamente:"
+          ls -la build/App.xcarchive
