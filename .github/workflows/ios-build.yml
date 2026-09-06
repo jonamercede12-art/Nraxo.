@@ -1,101 +1,66 @@
-name: Build 3105 iOS
+name: Build
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+      - name: Show project structure
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "Directorio actual:"
+          pwd
+          echo "Contenido:"
+          ls -la
+          echo "Archivos del proyecto:"
+          find . -maxdepth 3 -type f | sort | head -300
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          xcode-version: "16.2.0"
+          node-version: 20
+          cache: npm
 
-      - name: Show Xcode version
+      - name: Install dependencies
+        shell: bash
         run: |
-          xcodebuild -version
-          xcode-select -p
+          set -euxo pipefail
 
-      - name: Verify project
-        run: |
-          set -euo pipefail
-
-          test -f "ThreeOneOSFive.xcodeproj/project.pbxproj"
-          test -d "ThreeOneOSFive/SeedPatches"
-
-          echo "Proyecto encontrado correctamente."
-
-      - name: Verify required AIMBOT patches
-        run: |
-          set -euo pipefail
-
-          SEED="ThreeOneOSFive/SeedPatches"
-
-          test -f "$SEED/AIMBOT BODY FFTH.3105"
-          test -f "$SEED/AIMBOT CHEST FFTH.3105"
-          test -f "$SEED/AIMBOT BODY FFMX.3105"
-          test -f "$SEED/AIMBOT CHEST FFMX.3105"
-
-          echo "Todos los patches AIMBOT existen."
-
-      - name: Verify BODY and CHEST use the same patch
-        run: |
-          set -euo pipefail
-
-          SEED="ThreeOneOSFive/SeedPatches"
-
-          FFTH_BODY=$(shasum -a 256 "$SEED/AIMBOT BODY FFTH.3105" | awk '{print $1}')
-          FFTH_CHEST=$(shasum -a 256 "$SEED/AIMBOT CHEST FFTH.3105" | awk '{print $1}')
-
-          FFMX_BODY=$(shasum -a 256 "$SEED/AIMBOT BODY FFMX.3105" | awk '{print $1}')
-          FFMX_CHEST=$(shasum -a 256 "$SEED/AIMBOT CHEST FFMX.3105" | awk '{print $1}')
-
-          if [ "$FFTH_BODY" != "$FFTH_CHEST" ]; then
-            echo "ERROR: FFTH BODY y CHEST no usan el mismo patch."
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          else
+            echo "No se encontró package.json."
             exit 1
           fi
-
-          if [ "$FFMX_BODY" != "$FFMX_CHEST" ]; then
-            echo "ERROR: FFMX BODY y CHEST no usan el mismo patch."
-            exit 1
-          fi
-
-          echo "OK: FFTH BODY == FFTH CHEST"
-          echo "OK: FFMX BODY == FFMX CHEST"
-
-      - name: Fix patch name typo
-        run: |
-          set -euo pipefail
-
-          PROJECT="ThreeOneOSFive.xcodeproj/project.pbxproj"
-
-          sed -i '' 's/AIMBOT CHETS FFTH/AIMBOT CHEST FFTH/g' "$PROJECT"
-
-          echo "Nombres de patches corregidos."
-
-      - name: List AIMBOT patches
-        run: |
-          echo "=== AIMBOT PATCHES ==="
-          ls -lh "ThreeOneOSFive/SeedPatches/"*AIMBOT*3105
 
       - name: Build
+        shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
-          xcodebuild \
-            -project "ThreeOneOSFive.xcodeproj" \
-            -scheme "3105" \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+          if [ ! -f package.json ]; then
+            echo "No se encontró package.json."
+            exit 1
+          fi
+
+          echo "Scripts disponibles:"
+          node -e "console.log(require('./package.json').scripts || {})"
+
+          if npm run | grep -qE '^  build$'; then
+            npm run build
+          else
+            echo "El proyecto no tiene un script 'build' en package.json."
+            exit 1
+          fi
