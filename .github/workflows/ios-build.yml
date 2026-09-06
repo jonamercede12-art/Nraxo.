@@ -3,34 +3,225 @@ name: Build iOS IPA
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-latest
 
     steps:
+
+      # 1. Descargar repositorio
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
+      # 2. Mostrar versión de Xcode
+      - name: Comprobar Xcode
+        run: |
+          set -e
+          xcodebuild -version
+          xcode-select -p
+
+      # 3. Comprobar ZIP
+      - name: Comprobar ZIP
+        run: |
+          set -e
+
+          if [ ! -f "3105-with-github-actions.zip" ]; then
+            echo "ERROR: No se encontró 3105-with-github-actions.zip"
+            echo ""
+            echo "Archivos disponibles:"
+            find . -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+          echo "ZIP encontrado correctamente."
+
+      # 4. Extraer ZIP
       - name: Extraer ZIP
         run: |
           set -e
 
+          rm -rf extracted
+
           unzip -q "3105-with-github-actions.zip" -d extracted
 
-          echo "Contenido:"
-          find extracted -maxdepth 3 -type d
+          echo "Contenido extraído:"
+          find extracted/3105-main -maxdepth 3 -type d -print
 
-      - name: Verificar archivos del proyecto
+      # 5. Detectar proyecto
+      - name: Detectar proyecto
         run: |
           set -e
 
-          echo "Buscando App.swift..."
-          find extracted -name "App.swift" -print
+          PROJECT_DIR="extracted/3105-main"
+
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "ERROR: No existe $PROJECT_DIR"
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/ThreeOneOSFive.xcodeproj/project.pbxproj" ]; then
+            echo "ERROR: No se encontró project.pbxproj"
+            exit 1
+          fi
+
+          echo "Proyecto encontrado correctamente."
+
+      # 6. Corregir referencias rotas de SeedPatches
+      - name: Corregir referencias de SeedPatches
+        run: |
+          set -e
+
+          PROJECT_DIR="extracted/3105-main"
+          PBX="$PROJECT_DIR/ThreeOneOSFive.xcodeproj/project.pbxproj"
+          SEED="$PROJECT_DIR/ThreeOneOSFive/SeedPatches"
+
+          echo "SeedPatches:"
+          find "$SEED" -maxdepth 1 -type f -print
 
           echo ""
-          echo "Buscando PatchProjectLibrary.swift..."
-          find extracted -name "PatchProjectLibrary.swift" -print
+          echo "Corrigiendo nombres conocidos..."
 
+          python3 - "$PBX" <<'PY'
+          import sys
+          from pathlib import Path
+
+          pbx = Path(sys.argv[1])
+
+          text = pbx.read_text(encoding="utf-8")
+
+          replacements = {
+              "AIMBOT CHETS FFTH.3105": "AIMBOT CHEST FFTH.3105",
+              "AIMBOT CHEST  FFMX.3105": "AIMBOT CHEST FFMX.3105",
+          }
+
+          for old, new in replacements.items():
+              count = text.count(old)
+
+              if count:
+                  print(f"Corrigiendo: {old} -> {new} ({count} referencias)")
+                  text = text.replace(old, new)
+
+          pbx.write_text(text, encoding="utf-8")
+          PY
+
+          # El proyecto también tenía una referencia a PECHO FFTH,
+          # pero el archivo real se llama CHEST FFTH.
+          #
+          # Para evitar referencias duplicadas, eliminamos únicamente
+          # la referencia PECHO FFTH del proyecto.
+
+          python3 - "$PBX" <<'PY'
+          import sys
+          import re
+          from pathlib import Path
+
+          pbx = Path(sys.argv[1])
+          text = pbx.read_text(encoding="utf-8")
+
+          target = "AIMBOT PECHO FFTH.3105"
+
+          ids = set()
+
+          # Encontrar UUID de PBXBuildFile
+          for m in re.finditer(
+              r'([A-F0-9]{24})\s*/\*\s*' +
+              re.escape(target) +
+              r'\s+in Resources\s*\*/\s*=',
+              text
+          ):
+              ids.add(m.group(1))
+
+          # Encontrar UUID de PBXFileReference
+          for m in re.finditer(
+              r'([A-F0-9]{24})\s*/\*\s*' +
+              re.escape(target) +
+              r'\s*\*/\s*=\s*\{\s*isa\s*=\s*PBXFileReference;',
+              text
+          ):
+              ids.add(m.group(1))
+
+          print("Referencias PECHO FFTH encontradas:", len(ids))
+
+          # Eliminar líneas que contengan esos UUID.
+          if ids:
+              lines = text.splitlines(True)
+
+              new_lines = []
+
+              for line in lines:
+                  remove = False
+
+                  for uid in ids:
+                      if uid in line:
+                          remove = True
+                          break
+
+                  if not remove:
+                      new_lines.append(line)
+
+              text = "".join(new_lines)
+
+          pbx.write_text(text, encoding="utf-8")
+
+          print("Referencia PECHO FFTH eliminada.")
+          PY
+
+          echo ""
+          echo "Referencias restantes:"
+          grep -n "AIMBOT.*3105" "$PBX" || true
+
+      # 7. Verificar que no queden referencias a archivos inexistentes
+      - name: Verificar recursos
+        run: |
+          set -e
+
+          PROJECT_DIR="extracted/3105-main"
+          PBX="$PROJECT_DIR/ThreeOneOSFive.xcodeproj/project.pbxproj"
+          SEED="$PROJECT_DIR/ThreeOneOSFive/SeedPatches"
+
+          python3 - "$PBX" "$SEED" <<'PY'
+          import sys
+          import re
+          from pathlib import Path
+
+          pbx = Path(sys.argv[1])
+          seed = Path(sys.argv[2])
+
+          text = pbx.read_text(encoding="utf-8")
+
+          missing = []
+
+          # Buscar referencias a archivos .3105 dentro del grupo SeedPatches
+          for match in re.finditer(
+              r'/\*\s*([^*]+\.3105)\s*\*/',
+              text
+          ):
+              name = match.group(1).strip()
+
+              # Ignorar nombres que no pertenecen a SeedPatches
+              if name == "SeedPatches":
+                  continue
+
+              if not (seed / name).exists():
+                  missing.append(name)
+
+          missing = sorted(set(missing))
+
+          if missing:
+              echo = "\n".join(f"  - {x}" for x in missing)
+
+              print("ERROR: Se encontraron recursos inexistentes:")
+              print(echo)
+
+              raise SystemExit(1)
+
+          print("OK: No quedan referencias a archivos .3105 inexistentes.")
+          PY
+
+      # 8. Corregir App.swift si tiene declaraciones duplicadas
       - name: Corregir App.swift
         run: |
           set -e
@@ -91,6 +282,7 @@ jobs:
                   depth -= 1
 
                   if depth == 0:
+
                       end = i + 1
 
                       while end < len(text) and text[end] in " \t":
@@ -110,11 +302,6 @@ jobs:
                           "Duplicado maskedKey eliminado correctamente."
                       )
 
-                      print(
-                          "Declaraciones restantes:",
-                          text.count(needle)
-                      )
-
                       raise SystemExit(0)
 
               i += 1
@@ -129,6 +316,7 @@ jobs:
           echo "Verificación:"
           grep -n "var maskedKey: String" "$APP_FILE" || true
 
+      # 9. Corregir PatchProjectLibrary.swift
       - name: Corregir PatchProjectLibrary.swift
         run: |
           set -e
@@ -136,25 +324,20 @@ jobs:
           PATCH_FILE="extracted/3105-main/ThreeOneOSFive/helpers/PatchProjectLibrary.swift"
 
           if [ ! -f "$PATCH_FILE" ]; then
-            echo "PatchProjectLibrary.swift no encontrado en la ruta esperada."
-            echo "Buscando archivo..."
+            echo "Buscando PatchProjectLibrary.swift..."
             PATCH_FILE=$(find extracted -name "PatchProjectLibrary.swift" -type f | head -1)
           fi
 
           if [ -z "$PATCH_FILE" ] || [ ! -f "$PATCH_FILE" ]; then
-            echo "No se encontró PatchProjectLibrary.swift."
+            echo "ERROR: No se encontró PatchProjectLibrary.swift."
             exit 1
           fi
-
-          echo "Archivo encontrado:"
-          echo "$PATCH_FILE"
 
           python3 - "$PATCH_FILE" <<'PY'
           import sys
           from pathlib import Path
 
           path = Path(sys.argv[1])
-
           text = path.read_text(encoding="utf-8")
 
           old = "! $0.lastPathComponent.uppercased()"
@@ -175,37 +358,35 @@ jobs:
                   encoding="utf-8"
               )
 
-              print(
-                  "Corrección aplicada correctamente."
-              )
+              print("Corrección aplicada correctamente.")
           else:
-              print(
-                  "No fue necesario modificar el operador."
-              )
+              print("No fue necesario modificar el operador.")
           PY
 
           echo ""
-          echo "Verificación PatchProjectLibrary.swift:"
+          echo "Verificación:"
           grep -n "lastPathComponent.uppercased" "$PATCH_FILE" || true
 
+      # 10. Comprobar estructura
       - name: Comprobar estructura
         run: |
           set -e
 
           PROJECT_DIR="extracted/3105-main"
 
-          if [ ! -d "$PROJECT_DIR" ]; then
-            echo "ERROR: No existe:"
-            echo "$PROJECT_DIR"
-            exit 1
-          fi
+          echo "Proyecto:"
+          ls -la "$PROJECT_DIR"
 
-          if [ ! -f "$PROJECT_DIR/ThreeOneOSFive.xcodeproj/project.pbxproj" ]; then
-            echo "ERROR: No se encontró el proyecto Xcode."
-            exit 1
-          fi
+          echo ""
+          echo "Xcode project:"
+          ls -la "$PROJECT_DIR/ThreeOneOSFive.xcodeproj"
 
-          echo "Proyecto encontrado correctamente."
+          echo ""
+          echo "SeedPatches:"
+          find "$PROJECT_DIR/ThreeOneOSFive/SeedPatches" \
+            -maxdepth 1 \
+            -type f \
+            -print
 
           echo ""
           echo "Archivos Swift:"
@@ -214,6 +395,22 @@ jobs:
             -name "*.swift" \
             -print
 
+      # 11. Limpiar build anterior
+      - name: Limpiar compilación
+        run: |
+          set -e
+
+          cd extracted/3105-main
+
+          xcodebuild \
+            -project "ThreeOneOSFive.xcodeproj" \
+            -scheme "3105" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            clean
+
+      # 12. Compilar
       - name: Compilar ThreeOneOSFive
         run: |
           set -e
@@ -231,42 +428,63 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
+      # 13. Verificar aplicación
+      - name: Verificar aplicación compilada
+        run: |
+          set -e
+
+          APP="extracted/3105-main/build/Build/Products/Release-iphoneos/3105.app"
+
+          if [ ! -d "$APP" ]; then
+            echo "ERROR: No se encontró la aplicación compilada."
+            find extracted/3105-main/build \
+              -maxdepth 6 \
+              -type d \
+              -name "*.app" \
+              -print
+            exit 1
+          fi
+
+          echo "Aplicación compilada correctamente:"
+          du -sh "$APP"
+
+          echo ""
+          echo "Contenido:"
+          find "$APP" -maxdepth 1 -type f -print
+
+      # 14. Crear IPA sin firma
       - name: Crear IPA
         run: |
           set -e
 
-          APP=$(find extracted/3105-main/build/Build/Products \
-            -type d \
-            -name "*.app" \
-            | head -1)
+          APP="extracted/3105-main/build/Build/Products/Release-iphoneos/3105.app"
 
-          if [ -z "$APP" ]; then
-            echo "ERROR: No se encontró el archivo .app"
-            echo ""
-            echo "Contenido de Products:"
-            find extracted/3105-main/build/Build/Products \
-              -maxdepth 3 \
-              -print || true
-            exit 1
-          fi
+          rm -rf Payload
+          rm -f 3105.ipa
 
-          echo "APP encontrada:"
-          echo "$APP"
+          mkdir -p Payload
 
-          rm -rf Payload ThreeOneOSFive.ipa
+          cp -R "$APP" Payload/3105.app
 
-          mkdir Payload
+          cd Payload
+          zip -qry ../3105.ipa 3105.app
+          cd ..
 
-          cp -R "$APP" Payload/
-
-          zip -qry ThreeOneOSFive.ipa Payload
-
-          echo ""
           echo "IPA creada:"
-          ls -lh ThreeOneOSFive.ipa
+          ls -lh 3105.ipa
 
+      # 15. Subir IPA
       - name: Subir IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ThreeOneOSFive-IPA
-          path: ThreeOneOSFive.ipa
+          name: 3105-IPA
+          path: 3105.ipa
+          if-no-files-found: error
+
+      # 16. Subir aplicación .app por separado
+      - name: Subir aplicación .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3105-App
+          path: extracted/3105-main/build/Build/Products/Release-iphoneos/3105.app
+          if-no-files-found: error
