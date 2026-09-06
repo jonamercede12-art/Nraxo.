@@ -24,9 +24,16 @@ jobs:
           xcodebuild -version
           xcode-select -p
 
-      - name: Verify required patch files
-        working-directory: 3105-main
-        shell: bash
+      - name: Verify project
+        run: |
+          set -euo pipefail
+
+          test -f "ThreeOneOSFive.xcodeproj/project.pbxproj"
+          test -d "ThreeOneOSFive/SeedPatches"
+
+          echo "Proyecto encontrado correctamente."
+
+      - name: Verify required AIMBOT patches
         run: |
           set -euo pipefail
 
@@ -37,9 +44,9 @@ jobs:
           test -f "$SEED/AIMBOT BODY FFMX.3105"
           test -f "$SEED/AIMBOT CHEST FFMX.3105"
 
+          echo "Todos los patches AIMBOT existen."
+
       - name: Verify BODY and CHEST use the same patch
-        working-directory: 3105-main
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -51,22 +58,20 @@ jobs:
           FFMX_BODY=$(shasum -a 256 "$SEED/AIMBOT BODY FFMX.3105" | awk '{print $1}')
           FFMX_CHEST=$(shasum -a 256 "$SEED/AIMBOT CHEST FFMX.3105" | awk '{print $1}')
 
-          [ "$FFTH_BODY" = "$FFTH_CHEST" ] || {
+          if [ "$FFTH_BODY" != "$FFTH_CHEST" ]; then
             echo "ERROR: FFTH BODY y CHEST no usan el mismo patch."
             exit 1
-          }
+          fi
 
-          [ "$FFMX_BODY" = "$FFMX_CHEST" ] || {
+          if [ "$FFMX_BODY" != "$FFMX_CHEST" ]; then
             echo "ERROR: FFMX BODY y CHEST no usan el mismo patch."
             exit 1
-          }
+          fi
 
           echo "OK: FFTH BODY == FFTH CHEST"
           echo "OK: FFMX BODY == FFMX CHEST"
 
       - name: Fix patch name typo
-        working-directory: 3105-main
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -74,12 +79,20 @@ jobs:
 
           sed -i '' 's/AIMBOT CHETS FFTH/AIMBOT CHEST FFTH/g' "$PROJECT"
 
-      - name: Build
-        working-directory: 3105-main
+          echo "Nombres de patches corregidos."
+
+      - name: List AIMBOT patches
         run: |
+          echo "=== AIMBOT PATCHES ==="
+          ls -lh "ThreeOneOSFive/SeedPatches/"*AIMBOT*3105
+
+      - name: Build
+        run: |
+          set -euo pipefail
+
           xcodebuild \
-            -project ThreeOneOSFive.xcodeproj \
-            -scheme 3105 \
+            -project "ThreeOneOSFive.xcodeproj" \
+            -scheme "3105" \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
