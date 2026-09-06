@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build 3105 IPA
 
 on:
   workflow_dispatch:
@@ -12,29 +12,52 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify project files
+      - name: Extract source ZIP
         run: |
-          echo "Repository:"
-          pwd
+          set -e
+
+          ZIP_FILE="3105-with-github-actions.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: No se encontró $ZIP_FILE"
+            echo ""
+            echo "Archivos disponibles:"
+            ls -lah
+            exit 1
+          fi
+
+          echo "Descomprimiendo $ZIP_FILE..."
+
+          unzip -o "$ZIP_FILE" -d .
 
           echo ""
-          echo "Contenido:"
-          ls -la
+          echo "Contenido extraído:"
+          ls -lah
 
-          echo ""
-          echo "Contenido de 3105-main:"
-          ls -la 3105-main
+      - name: Verify Xcode project
+        run: |
+          set -e
 
-          echo ""
-          echo "Comprobando Xcode project:"
-          test -f "3105-main/ThreeOneOSFive.xcodeproj/project.pbxproj"
+          PROJECT="3105-main/ThreeOneOSFive.xcodeproj/project.pbxproj"
+
+          if [ ! -f "$PROJECT" ]; then
+            echo "ERROR: No se encontró:"
+            echo "$PROJECT"
+            echo ""
+            echo "Proyectos Xcode encontrados:"
+            find . -name "*.xcodeproj" -type d -print
+            exit 1
+          fi
+
+          echo "Proyecto encontrado correctamente:"
+          echo "$PROJECT"
 
       - name: Show Xcode version
         run: |
           xcodebuild -version
           xcode-select -p
 
-      - name: Show targets
+      - name: Show project targets
         working-directory: 3105-main
         run: |
           xcodebuild \
@@ -44,6 +67,8 @@ jobs:
       - name: Build iOS app
         working-directory: 3105-main
         run: |
+          set -e
+
           rm -rf build
 
           xcodebuild \
@@ -56,31 +81,34 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Locate application
+      - name: Find built app
         working-directory: 3105-main
         run: |
-          echo "Buscando 3105.app..."
+          set -e
 
-          find build \
-            -type d \
-            -name "3105.app" \
-            -print
-
-          APP_PATH=$(find build \
+          APP_PATH=$(find build/Build/Products \
             -type d \
             -name "3105.app" \
             -print -quit)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: 3105.app no fue generado."
+            echo "ERROR: No se encontró 3105.app"
+            echo ""
+            echo "Contenido de Build/Products:"
+            find build/Build/Products -maxdepth 4 -print || true
             exit 1
           fi
+
+          echo "App encontrada:"
+          echo "$APP_PATH"
 
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
       - name: Create IPA
         working-directory: 3105-main
         run: |
+          set -e
+
           rm -rf Payload
           mkdir -p Payload
 
@@ -88,13 +116,12 @@ jobs:
 
           rm -f 3105.ipa
 
-          /usr/bin/zip \
-            -qry \
-            3105.ipa \
-            Payload
+          zip -qry 3105.ipa Payload
 
           echo ""
-          echo "IPA generada:"
+          echo "================================"
+          echo "IPA CREADA CORRECTAMENTE"
+          echo "================================"
           ls -lh 3105.ipa
 
       - name: Upload IPA
