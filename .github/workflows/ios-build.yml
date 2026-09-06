@@ -16,46 +16,16 @@ jobs:
         run: |
           set -e
 
-          ZIP_FILE="3105-with-github-actions.zip"
+          unzip -o "3105-with-github-actions.zip" -d .
 
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: No se encontró $ZIP_FILE"
-            echo ""
-            echo "Archivos disponibles:"
-            ls -lah
-            exit 1
-          fi
+          echo "Proyecto:"
+          ls -la "3105-main"
 
-          echo "Descomprimiendo $ZIP_FILE..."
-
-          unzip -o "$ZIP_FILE" -d .
-
-          echo ""
-          echo "Contenido extraído:"
-          ls -lah
-
-      - name: Verify Xcode project
-        run: |
-          set -e
-
-          PROJECT="3105-main/ThreeOneOSFive.xcodeproj/project.pbxproj"
-
-          if [ ! -f "$PROJECT" ]; then
-            echo "ERROR: No se encontró:"
-            echo "$PROJECT"
-            echo ""
-            echo "Proyectos Xcode encontrados:"
-            find . -name "*.xcodeproj" -type d -print
-            exit 1
-          fi
-
-          echo "Proyecto encontrado correctamente:"
-          echo "$PROJECT"
+          test -f "3105-main/ThreeOneOSFive.xcodeproj/project.pbxproj"
 
       - name: Show Xcode version
         run: |
           xcodebuild -version
-          xcode-select -p
 
       - name: Show project targets
         working-directory: 3105-main
@@ -71,12 +41,14 @@ jobs:
 
           rm -rf build
 
+          mkdir -p build
+
           xcodebuild \
             -project ThreeOneOSFive.xcodeproj \
             -target 3105 \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build \
+            CONFIGURATION_BUILD_DIR="$PWD/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
@@ -86,23 +58,23 @@ jobs:
         run: |
           set -e
 
-          APP_PATH=$(find build/Build/Products \
+          echo "Contenido de build:"
+          find build -maxdepth 3 -print
+
+          APP_PATH=$(find build \
             -type d \
             -name "3105.app" \
             -print -quit)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No se encontró 3105.app"
-            echo ""
-            echo "Contenido de Build/Products:"
-            find build/Build/Products -maxdepth 4 -print || true
+            echo "ERROR: Xcode no generó 3105.app"
             exit 1
           fi
 
-          echo "App encontrada:"
+          echo "APP encontrada:"
           echo "$APP_PATH"
 
-          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          echo "APP_PATH=$PWD/$APP_PATH" >> "$GITHUB_ENV"
 
       - name: Create IPA
         working-directory: 3105-main
@@ -110,18 +82,16 @@ jobs:
           set -e
 
           rm -rf Payload
-          mkdir -p Payload
+          mkdir Payload
 
           cp -R "$APP_PATH" Payload/3105.app
 
-          rm -f 3105.ipa
-
           zip -qry 3105.ipa Payload
 
-          echo ""
           echo "================================"
-          echo "IPA CREADA CORRECTAMENTE"
+          echo "IPA GENERADA"
           echo "================================"
+
           ls -lh 3105.ipa
 
       - name: Upload IPA
