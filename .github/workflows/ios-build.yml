@@ -16,39 +16,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show project structure
+      - name: Show repository
         run: |
-          echo "Directorio actual:"
+          echo "Directorio:"
           pwd
 
-          echo ""
-          echo "Contenido:"
-          ls -la
-
-          echo ""
-          echo "Buscando proyectos Xcode:"
-          find . -name "*.xcodeproj" -type d
-          
-          echo ""
-          echo "Buscando workspace:"
-          find . -name "*.xcworkspace" -type d
-
-      - name: Select Xcode
-        run: |
-          echo "Xcode disponible:"
-          ls -d /Applications/Xcode*.app || true
-
-          sudo xcode-select -s /Applications/Xcode_16.4.app
-
-          xcodebuild -version
+          echo "Archivos del repositorio:"
+          find . -maxdepth 3 -print | sort
 
       - name: Find Xcode project
         id: project
         run: |
-          PROJECT=$(find . -name "*.xcodeproj" -type d | head -n 1)
+          PROJECT=$(find "$GITHUB_WORKSPACE" \
+            -name "*.xcodeproj" \
+            -type d \
+            -print -quit)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró ningún archivo .xcodeproj"
+            echo "ERROR: No se encontró ningún .xcodeproj"
+            echo ""
+            echo "Contenido del repositorio:"
+            find "$GITHUB_WORKSPACE" -maxdepth 5 -print
             exit 1
           fi
 
@@ -57,7 +45,21 @@ jobs:
 
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-      - name: Show schemes
+      - name: Select Xcode
+        run: |
+          echo "Xcode instalado:"
+          ls -d /Applications/Xcode*.app
+
+          XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
+
+          echo "Usando:"
+          echo "$XCODE"
+
+          sudo xcode-select -s "$XCODE"
+
+          xcodebuild -version
+
+      - name: List project
         run: |
           PROJECT="${{ steps.project.outputs.project }}"
 
@@ -69,49 +71,48 @@ jobs:
         run: |
           PROJECT="${{ steps.project.outputs.project }}"
 
-          mkdir -p build
+          mkdir -p "$GITHUB_WORKSPACE/build"
 
           xcodebuild \
             -project "$PROJECT" \
             -scheme ThreeOneOSFive \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build \
+            -derivedDataPath "$GITHUB_WORKSPACE/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
       - name: Create IPA
         run: |
-          mkdir -p Payload
+          mkdir -p "$GITHUB_WORKSPACE/Payload"
 
-          APP_PATH=$(find build/Build/Products \
+          APP_PATH=$(find "$GITHUB_WORKSPACE/build/Build/Products" \
             -name "*.app" \
             -type d \
-            | head -n 1)
+            -print -quit)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No se encontró el archivo .app"
-            echo ""
-            echo "Archivos encontrados:"
-            find build -type f | head -100
+            echo "ERROR: No se encontró el .app"
+            find "$GITHUB_WORKSPACE/build" -print
             exit 1
           fi
 
-          echo "APP encontrada:"
+          echo "App encontrada:"
           echo "$APP_PATH"
 
-          cp -R "$APP_PATH" Payload/
+          cp -R "$APP_PATH" "$GITHUB_WORKSPACE/Payload/"
 
-          zip -r Nraxo-unsigned.ipa Payload
+          cd "$GITHUB_WORKSPACE"
 
-          echo ""
+          zip -r Nraxo.ipa Payload
+
           echo "IPA creada:"
-          ls -lh Nraxo-unsigned.ipa
+          ls -lh Nraxo.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Nraxo-unsigned-IPA
-          path: Nraxo-unsigned.ipa
+          name: Nraxo-IPA
+          path: Nraxo.ipa
           if-no-files-found: error
