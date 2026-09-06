@@ -11,167 +11,105 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare project from ZIP
+      - name: Extract project
         shell: bash
         run: |
           set -euxo pipefail
-
-          ZIP_FILE="3105-with-github-actions.zip"
-
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: No se encontró $ZIP_FILE"
-            exit 1
-          fi
-
-          echo "Extrayendo proyecto..."
 
           mkdir -p project
+          unzip -o 3105-with-github-actions.zip -d project
 
-          unzip -o "$ZIP_FILE" -d project
-
-          echo ""
-          echo "Contenido extraído:"
-          find project -maxdepth 5 -print | head -500
-
-      - name: Locate iOS project
+      - name: Find project
         shell: bash
         run: |
           set -euxo pipefail
-
-          echo "Buscando .xcodeproj y .xcworkspace..."
 
           PROJECT=$(find project \
             -type d \
             -name "*.xcodeproj" \
             -not -path "*/Pods/*" \
-            -not -path "*/DerivedData/*" \
             | head -n 1)
 
-          WORKSPACE=$(find project \
-            -type d \
-            -name "*.xcworkspace" \
-            -not -path "*/Pods/*" \
-            -not -path "*/DerivedData/*" \
-            | head -n 1)
-
-          if [ -n "$WORKSPACE" ]; then
-            echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-            echo "Encontrado workspace:"
-            echo "$WORKSPACE"
-
-          elif [ -n "$PROJECT" ]; then
-            echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-            echo "Encontrado proyecto:"
-            echo "$PROJECT"
-
-          else
-            echo "ERROR: El ZIP fue extraído pero no contiene .xcodeproj ni .xcworkspace."
-            echo ""
-            echo "Archivos encontrados:"
-            find project -type f | sort
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No se encontró el proyecto Xcode."
             exit 1
           fi
+
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
       - name: Select Xcode
         shell: bash
         run: |
           set -euxo pipefail
-
           sudo xcode-select -s /Applications/Xcode.app
-
           xcodebuild -version
 
-      - name: Show schemes
+      - name: Detect scheme
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ -n "${WORKSPACE:-}" ]; then
-            xcodebuild \
-              -workspace "$WORKSPACE" \
-              -list
-          else
-            xcodebuild \
-              -project "$PROJECT" \
-              -list
-          fi
+          SCHEME=$(xcodebuild \
+            -project "$PROJECT" \
+            -list |
+            awk '/Schemes:/ {found=1; next} found && NF {print $1; exit}')
 
-      - name: Prepare patches
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "Buscando patches..."
-
-          find project \
-            -type f \
-            \( -name "*.patch" -o -name "*.diff" \) \
-            -print
-
-          echo "Patch preparation completed."
-
-      - name: Build iOS project
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          if [ -n "${WORKSPACE:-}" ]; then
-
-            SCHEME=$(xcodebuild \
-              -workspace "$WORKSPACE" \
-              -list \
-              | awk '/Schemes:/ {found=1; next} found && NF {print $1; exit}')
-
-            if [ -z "$SCHEME" ]; then
-              echo "ERROR: No se encontró ningún Scheme."
-              exit 1
-            fi
-
-            echo "Scheme detectado: $SCHEME"
-
-            xcodebuild \
-              -workspace "$WORKSPACE" \
-              -scheme "$SCHEME" \
-              -configuration Release \
-              -sdk iphoneos \
-              -archivePath "$PWD/build/App.xcarchive" \
-              archive
-
-          else
-
-            SCHEME=$(xcodebuild \
-              -project "$PROJECT" \
-              -list \
-              | awk '/Schemes:/ {found=1; next} found && NF {print $1; exit}')
-
-            if [ -z "$SCHEME" ]; then
-              echo "ERROR: No se encontró ningún Scheme."
-              exit 1
-            fi
-
-            echo "Scheme detectado: $SCHEME"
-
-            xcodebuild \
-              -project "$PROJECT" \
-              -scheme "$SCHEME" \
-              -configuration Release \
-              -sdk iphoneos \
-              -archivePath "$PWD/build/App.xcarchive" \
-              archive
-          fi
-
-      - name: Show archive
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          if [ ! -d "build/App.xcarchive" ]; then
-            echo "ERROR: No se generó el archive."
+          if [ -z "$SCHEME" ]; then
+            echo "ERROR: No se encontró Scheme."
             exit 1
           fi
 
-          echo "Archive generado correctamente:"
-          ls -la build/App.xcarchive
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "Scheme: $SCHEME"
+
+      - name: Build unsigned app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf build
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Create IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          APP_PATH=$(find build/DerivedData/Build/Products \
+            -type d \
+            -name "*.app" \
+            | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No se encontró el .app."
+            exit 1
+          fi
+
+          echo "APP encontrado:"
+          echo "$APP_PATH"
+
+          mkdir -p build/Payload
+
+          cp -R "$APP_PATH" build/Payload/
+
+          cd build
+          zip -r 3105.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3105-ipa
+          path: build/3105.ipa
