@@ -17,7 +17,12 @@ jobs:
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.4"
+          xcode-version: "16.2.0"
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcode-select -p
 
       - name: Verify required patch files
         working-directory: 3105-main
@@ -28,35 +33,11 @@ jobs:
           SEED="ThreeOneOSFive/SeedPatches"
 
           test -f "$SEED/AIMBOT BODY FFTH.3105"
+          test -f "$SEED/AIMBOT CHEST FFTH.3105"
           test -f "$SEED/AIMBOT BODY FFMX.3105"
+          test -f "$SEED/AIMBOT CHEST FFMX.3105"
 
-          echo "FFTH patch:"
-          shasum -a 256 "$SEED/AIMBOT BODY FFTH.3105"
-
-          echo "FFMX patch:"
-          shasum -a 256 "$SEED/AIMBOT BODY FFMX.3105"
-
-      - name: Create BODY/CHEST patch aliases
-        working-directory: 3105-main
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SEED="ThreeOneOSFive/SeedPatches"
-
-          # FFTH:
-          # BODY and CHEST MUST use the exact same FFTH patch.
-          cp -f \
-            "$SEED/AIMBOT BODY FFTH.3105" \
-            "$SEED/AIMBOT CHEST FFTH.3105"
-
-          # FFMX:
-          # BODY and CHEST MUST use the exact same FFMX patch.
-          cp -f \
-            "$SEED/AIMBOT BODY FFMX.3105" \
-            "$SEED/AIMBOT CHEST FFMX.3105"
-
-      - name: Verify BODY == CHEST
+      - name: Verify BODY and CHEST use the same patch
         working-directory: 3105-main
         shell: bash
         run: |
@@ -70,20 +51,20 @@ jobs:
           FFMX_BODY=$(shasum -a 256 "$SEED/AIMBOT BODY FFMX.3105" | awk '{print $1}')
           FFMX_CHEST=$(shasum -a 256 "$SEED/AIMBOT CHEST FFMX.3105" | awk '{print $1}')
 
-          if [ "$FFTH_BODY" != "$FFTH_CHEST" ]; then
+          [ "$FFTH_BODY" = "$FFTH_CHEST" ] || {
             echo "ERROR: FFTH BODY y CHEST no usan el mismo patch."
             exit 1
-          fi
+          }
 
-          if [ "$FFMX_BODY" != "$FFMX_CHEST" ]; then
+          [ "$FFMX_BODY" = "$FFMX_CHEST" ] || {
             echo "ERROR: FFMX BODY y CHEST no usan el mismo patch."
             exit 1
-          fi
+          }
 
           echo "OK: FFTH BODY == FFTH CHEST"
           echo "OK: FFMX BODY == FFMX CHEST"
 
-      - name: Fix incorrect patch reference names
+      - name: Fix patch name typo
         working-directory: 3105-main
         shell: bash
         run: |
@@ -91,20 +72,7 @@ jobs:
 
           PROJECT="ThreeOneOSFive.xcodeproj/project.pbxproj"
 
-          sed -i '' \
-            's/AIMBOT CHETS FFTH/AIMBOT CHEST FFTH/g' \
-            "$PROJECT"
-
-          sed -i '' \
-            's/AIMBOT CHEST  FFMX/AIMBOT CHEST FFMX/g' \
-            "$PROJECT"
-
-      - name: Show final Aimbot patches
-        working-directory: 3105-main
-        shell: bash
-        run: |
-          echo "=== AIMBOT PATCHES ==="
-          ls -lh ThreeOneOSFive/SeedPatches/*AIMBOT*3105
+          sed -i '' 's/AIMBOT CHETS FFTH/AIMBOT CHEST FFTH/g' "$PROJECT"
 
       - name: Build
         working-directory: 3105-main
