@@ -1,10 +1,10 @@
-name: Build
+name: Build iOS IPA
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 jobs:
   build:
@@ -14,69 +14,77 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show project structure
+      - name: Detect iOS project
         shell: bash
         run: |
           set -euxo pipefail
-          echo "Directorio:"
+
+          echo "Directorio actual:"
           pwd
+
           echo "Contenido:"
           ls -la
-          echo "Archivos principales:"
-          find . -maxdepth 3 -type f | sort | head -300
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
+          echo ""
+          echo "Buscando proyectos iOS..."
 
-      - name: Check package.json
+          find . \
+            -type f \
+            \( -name "*.xcodeproj" -o -name "*.xcworkspace" -o -name "Package.swift" \) \
+            -not -path "*/Pods/*" \
+            -not -path "*/DerivedData/*" \
+            -print
+
+      - name: Select Xcode
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ ! -f package.json ]; then
-            echo "ERROR: No se encontró package.json en la raíz del proyecto."
-            echo "Buscando package.json:"
-            find . -name package.json -not -path './node_modules/*' -print
+          sudo xcode-select -s /Applications/Xcode.app
+
+          echo "Xcode:"
+          xcodebuild -version
+
+      - name: Find Xcode project
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          PROJECT=$(find . -type f -name "*.xcodeproj" \
+            -not -path "*/Pods/*" \
+            -not -path "*/DerivedData/*" \
+            | head -n 1)
+
+          WORKSPACE=$(find . -type f -name "*.xcworkspace" \
+            -not -path "*/Pods/*" \
+            -not -path "*/DerivedData/*" \
+            | head -n 1)
+
+          if [ -n "$WORKSPACE" ]; then
+            echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+            echo "Encontrado workspace: $WORKSPACE"
+          elif [ -n "$PROJECT" ]; then
+            echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+            echo "Encontrado proyecto: $PROJECT"
+          else
+            echo "ERROR: No se encontró ningún .xcodeproj ni .xcworkspace."
+            echo ""
+            echo "Estructura del proyecto:"
+            find . -maxdepth 4 -print
             exit 1
           fi
 
-          echo "package.json encontrado:"
-          cat package.json
-
-      - name: Install dependencies
+      - name: Show schemes
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ -f package-lock.json ]; then
-            echo "Usando package-lock.json"
-            npm ci
-          elif [ -f npm-shrinkwrap.json ]; then
-            echo "Usando npm-shrinkwrap.json"
-            npm ci
-          elif [ -f yarn.lock ]; then
-            echo "Usando yarn.lock"
-            corepack enable
-            yarn install --frozen-lockfile
+          if [ -n "${WORKSPACE:-}" ]; then
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -list
           else
-            echo "No existe lockfile. Usando npm install."
-            npm install
-          fi
-
-      - name: Build
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "Scripts disponibles:"
-          npm run
-
-          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
-            echo "Ejecutando build..."
-            npm run build
-          else
-            echo "ERROR: package.json no contiene un script 'build'."
-            exit 1
+            xcodebuild \
+              -project "$PROJECT" \
+              -list
           fi
