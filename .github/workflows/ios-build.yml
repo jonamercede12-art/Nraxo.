@@ -14,32 +14,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare project
+      - name: Locate Xcode project
         shell: bash
         run: |
           set -e
 
-          # Si el proyecto viene dentro del ZIP, lo descomprimimos
-          if [ -f "3105-with-github-actions.zip" ]; then
-            echo "ZIP encontrado. Descomprimiendo..."
-            mkdir -p "$RUNNER_TEMP/3105-source"
-            unzip -q "3105-with-github-actions.zip" -d "$RUNNER_TEMP/3105-source"
-            SEARCH_ROOT="$RUNNER_TEMP/3105-source"
-          else
-            echo "No hay ZIP. Buscando proyecto directamente..."
-            SEARCH_ROOT="$GITHUB_WORKSPACE"
-          fi
-
-          echo "Buscando ThreeOneOSFive.xcodeproj..."
-
-          PROJECT=$(find "$SEARCH_ROOT" \
+          PROJECT=$(find "$GITHUB_WORKSPACE" \
             -name "ThreeOneOSFive.xcodeproj" \
             -type d \
             -print -quit)
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: No se encontró ThreeOneOSFive.xcodeproj"
-            find "$SEARCH_ROOT" -maxdepth 4 -type d -name "*.xcodeproj" -print
             exit 1
           fi
 
@@ -48,14 +34,47 @@ jobs:
 
           echo "PROJECT_PATH=$PROJECT" >> "$GITHUB_ENV"
 
+      - name: Fix missing SeedPatches filenames
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_DIR="$(dirname "$PROJECT_PATH")"
+          PATCH_DIR="$PROJECT_DIR/ThreeOneOSFive/SeedPatches"
+
+          echo "SeedPatches:"
+          ls -la "$PATCH_DIR"
+
+          # El proyecto busca PECHO FFTH, pero el archivo real se llama CHEST FFTH
+          if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
+             [ ! -f "$PATCH_DIR/AIMBOT PECHO FFTH.3105" ]; then
+            cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
+               "$PATCH_DIR/AIMBOT PECHO FFTH.3105"
+          fi
+
+          # El proyecto tiene CHETS (error de escritura), pero el archivo real es CHEST
+          if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
+             [ ! -f "$PATCH_DIR/AIMBOT CHETS FFTH.3105" ]; then
+            cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
+               "$PATCH_DIR/AIMBOT CHETS FFTH.3105"
+          fi
+
+          # El proyecto tiene dos espacios en CHEST  FFMX
+          if [ -f "$PATCH_DIR/AIMBOT CHEST FFMX.3105" ] && \
+             [ ! -f "$PATCH_DIR/AIMBOT CHEST  FFMX.3105" ]; then
+            cp "$PATCH_DIR/AIMBOT CHEST FFMX.3105" \
+               "$PATCH_DIR/AIMBOT CHEST  FFMX.3105"
+          fi
+
+          echo "Archivos después de la corrección:"
+          ls -la "$PATCH_DIR"
+
       - name: Show Xcode version
         run: |
           xcodebuild -version
 
-      - name: Check scheme
+      - name: Check project
         run: |
-          set -e
-
           xcodebuild \
             -project "$PROJECT_PATH" \
             -list
@@ -65,7 +84,9 @@ jobs:
         run: |
           set -e
 
+          rm -rf "$RUNNER_TEMP/DerivedData"
           rm -rf "$RUNNER_TEMP/3105-build"
+
           mkdir -p "$RUNNER_TEMP/3105-build"
 
           xcodebuild \
@@ -80,7 +101,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Find application
+      - name: Find app
         shell: bash
         run: |
           set -e
@@ -92,7 +113,7 @@ jobs:
             -print -quit)
 
           if [ -z "$APP" ]; then
-            echo "ERROR: No se encontró el .app"
+            echo "ERROR: No se encontró el archivo .app"
             find "$RUNNER_TEMP/3105-build" -maxdepth 3 -print
             exit 1
           fi
@@ -110,13 +131,16 @@ jobs:
           rm -rf "$RUNNER_TEMP/Payload"
           mkdir -p "$RUNNER_TEMP/Payload"
 
-          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/3105.app"
 
           cd "$RUNNER_TEMP"
 
-          zip -r "3105.ipa" Payload
+          zip -r -q "3105.ipa" Payload
 
-          echo "IPA creado:"
+          echo "================================="
+          echo "IPA CREADO CORRECTAMENTE"
+          echo "================================="
+
           ls -lh "$RUNNER_TEMP/3105.ipa"
 
       - name: Upload IPA
