@@ -19,71 +19,233 @@ jobs:
         run: |
           set -euxo pipefail
 
-          mkdir -p project
-          unzip -o 3105-with-github-actions.zip -d project
+          ZIP_FILE="3105-with-github-actions.zip"
 
-      - name: Find project
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: No se encontró $ZIP_FILE"
+            exit 1
+          fi
+
+          rm -rf project
+          mkdir -p project
+
+          unzip -o "$ZIP_FILE" -d project
+
+          echo "Proyecto extraído:"
+          find project -maxdepth 5 -print | head -500
+
+      - name: Detect project root
         shell: bash
         run: |
           set -euxo pipefail
 
-          PROJECT=$(find project \
+          PROJECT_ROOT=$(find project \
             -type d \
             -name "*.xcodeproj" \
             -not -path "*/Pods/*" \
-            | head -n 1)
+            -not -path "*/DerivedData/*" \
+            -print -quit)
 
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró el proyecto Xcode."
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "ERROR: No se encontró ningún .xcodeproj dentro del ZIP."
+            find project -maxdepth 8 -print
             exit 1
           fi
 
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          PROJECT_DIR=$(dirname "$PROJECT_ROOT")
+
+          echo "PROJECT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Proyecto Xcode:"
+          echo "$PROJECT_ROOT"
+
+      - name: Apply patches
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$PROJECT_DIR"
+
+          echo "Buscando patches..."
+
+          mapfile -t PATCHES < <(
+            find . \
+              -type f \
+              \( -name "*.patch" -o -name "*.diff" \) \
+              -not -path "*/Pods/*" \
+              -not -path "*/DerivedData/*" \
+              -print | sort
+          )
+
+          if [ "${#PATCHES[@]}" -eq 0 ]; then
+            echo "No se encontraron archivos .patch o .diff."
+            echo "Continuando sin patches."
+            exit 0
+          fi
+
+          echo "Patches encontrados:"
+          printf '%s\n' "${PATCHES[@]}"
+
+          for PATCH in "${PATCHES[@]}"; do
+            echo ""
+            echo "========================================"
+            echo "Aplicando patch: $PATCH"
+            echo "========================================"
+
+            if git apply --check "$PATCH"; then
+              git apply "$PATCH"
+              echo "Patch aplicado correctamente."
+            else
+              echo "git apply no pudo aplicar el patch directamente."
+              echo "Intentando patch con -p1..."
+
+              if patch --dry-run -p1 < "$PATCH"; then
+                patch -p1 < "$PATCH"
+                echo "Patch aplicado con -p1."
+              else
+                echo "ERROR: No se pudo aplicar el patch:"
+                echo "$PATCH"
+                exit 1
+              fi
+            fi
+          done
 
       - name: Select Xcode
         shell: bash
         run: |
           set -euxo pipefail
+
           sudo xcode-select -s /Applications/Xcode.app
+
+          echo "Xcode seleccionado:"
           xcodebuild -version
+
+      - name: Detect workspace or project
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          WORKSPACE=$(find "$PROJECT_DIR" \
+            -type d \
+            -name "*.xcworkspace" \
+            -not -path "*/Pods/*" \
+            -not -path "*/DerivedData/*" \
+            -print -quit || true)
+
+          if [ -n "$WORKSPACE" ]; then
+            echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+            echo "BUILD_TYPE=workspace" >> "$GITHUB_ENV"
+            echo "Workspace encontrado:"
+            echo "$WORKSPACE"
+          else
+            echo "BUILD_TYPE=project" >> "$GITHUB_ENV"
+            echo "Usando proyecto:"
+            echo "$PROJECT"
+          fi
 
       - name: Detect scheme
         shell: bash
         run: |
           set -euxo pipefail
 
-          SCHEME=$(xcodebuild \
-            -project "$PROJECT" \
-            -list |
-            awk '/Schemes:/ {found=1; next} found && NF {print $1; exit}')
+          if [ "${BUILD_TYPE}" = "workspace" ]; then
+            LIST_OUTPUT=$(xcodebuild \
+              -workspace "$WORKSPACE" \
+              -list)
+          else
+            LIST_OUTPUT=$(xcodebuild \
+              -project "$PROJECT" \
+              -list)
+          fi
+
+          echo "$LIST_OUTPUT"
+
+          SCHEME=$(echo "$LIST_OUTPUT" |
+            awk '
+              /Schemes:/ {
+                found=1
+                next
+              }
+              found && NF {
+                print $1
+                exit
+              }
+            ')
 
           if [ -z "$SCHEME" ]; then
-            echo "ERROR: No se encontró Scheme."
+            echo "ERROR: No se encontró ningún Scheme."
             exit 1
           fi
 
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-          echo "Scheme: $SCHEME"
 
-      - name: Build unsigned app
+          echo "Scheme seleccionado:"
+          echo "$SCHEME"
+
+      - name: Clean
         shell: bash
         run: |
           set -euxo pipefail
 
           rm -rf build
 
-          xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
+          if [ "${BUILD_TYPE}" = "workspace" ]; then
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              clean \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
+          else
+            xcodebuild \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              clean \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
+          fi
 
-      - name: Create IPA
+      - name: Build unsigned app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p build
+
+          if [ "${BUILD_TYPE}" = "workspace" ]; then
+
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath "$PWD/build/DerivedData" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              build
+
+          else
+
+            xcodebuild \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath "$PWD/build/DerivedData" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              build
+
+          fi
+
+      - name: Find app
         shell: bash
         run: |
           set -euxo pipefail
@@ -91,25 +253,54 @@ jobs:
           APP_PATH=$(find build/DerivedData/Build/Products \
             -type d \
             -name "*.app" \
-            | head -n 1)
+            -not -path "*/PlugIns/*" \
+            -print -quit)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No se encontró el .app."
+            echo "ERROR: No se encontró ningún .app después de la compilación."
+
+            echo "Contenido de Build/Products:"
+            find build/DerivedData/Build/Products -maxdepth 5 -print || true
+
             exit 1
           fi
 
-          echo "APP encontrado:"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+          echo "Aplicación encontrada:"
           echo "$APP_PATH"
 
+      - name: Create unsigned IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf build/Payload
           mkdir -p build/Payload
 
           cp -R "$APP_PATH" build/Payload/
 
           cd build
-          zip -r 3105.ipa Payload
+
+          rm -f 3105.ipa
+
+          zip -qry 3105.ipa Payload
+
+          if [ ! -f 3105.ipa ]; then
+            echo "ERROR: No se pudo crear la IPA."
+            exit 1
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "IPA CREADA CORRECTAMENTE"
+          echo "========================================"
+
+          ls -lh 3105.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: 3105-ipa
           path: build/3105.ipa
+          if-no-files-found: error
