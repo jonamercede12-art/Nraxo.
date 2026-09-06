@@ -11,30 +11,69 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repository
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Locate Xcode project
+      - name: Descomprimir proyecto
         shell: bash
         run: |
           set -e
 
-          PROJECT=$(find "$GITHUB_WORKSPACE" \
-            -name "ThreeOneOSFive.xcodeproj" \
+          mkdir -p "$RUNNER_TEMP/source"
+
+          ZIP=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name "3105-with-github-actions.zip" -print -quit)
+
+          if [ -n "$ZIP" ]; then
+            echo "ZIP encontrado:"
+            echo "$ZIP"
+
+            unzip -q "$ZIP" -d "$RUNNER_TEMP/source"
+          else
+            echo "No se encontró el ZIP."
+            echo "Buscando proyecto directamente..."
+
+            cp -R "$GITHUB_WORKSPACE"/* "$RUNNER_TEMP/source/" 2>/dev/null || true
+          fi
+
+          echo "Contenido:"
+          find "$RUNNER_TEMP/source" -maxdepth 3 -print
+
+      - name: Encontrar Xcode project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT=$(find "$RUNNER_TEMP/source" \
             -type d \
+            -name "ThreeOneOSFive.xcodeproj" \
             -print -quit)
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: No se encontró ThreeOneOSFive.xcodeproj"
+            find "$RUNNER_TEMP/source" -type d -name "*.xcodeproj" -print
             exit 1
           fi
 
-          echo "Proyecto encontrado:"
+          echo "================================="
+          echo "PROYECTO ENCONTRADO:"
           echo "$PROJECT"
+          echo "================================="
 
           echo "PROJECT_PATH=$PROJECT" >> "$GITHUB_ENV"
 
-      - name: Fix missing SeedPatches filenames
+      - name: Mostrar versión de Xcode
+        run: |
+          xcodebuild -version
+
+      - name: Verificar proyecto y Scheme
+        run: |
+          set -e
+
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -list
+
+      - name: Preparar SeedPatches
         shell: bash
         run: |
           set -e
@@ -42,44 +81,31 @@ jobs:
           PROJECT_DIR="$(dirname "$PROJECT_PATH")"
           PATCH_DIR="$PROJECT_DIR/ThreeOneOSFive/SeedPatches"
 
-          echo "SeedPatches:"
-          ls -la "$PATCH_DIR"
+          if [ -d "$PATCH_DIR" ]; then
+            echo "SeedPatches encontrado:"
+            ls -la "$PATCH_DIR"
 
-          # El proyecto busca PECHO FFTH, pero el archivo real se llama CHEST FFTH
-          if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
-             [ ! -f "$PATCH_DIR/AIMBOT PECHO FFTH.3105" ]; then
-            cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
-               "$PATCH_DIR/AIMBOT PECHO FFTH.3105"
+            # Correcciones de nombres si son necesarias
+            if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
+               [ ! -f "$PATCH_DIR/AIMBOT PECHO FFTH.3105" ]; then
+              cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
+                 "$PATCH_DIR/AIMBOT PECHO FFTH.3105"
+            fi
+
+            if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
+               [ ! -f "$PATCH_DIR/AIMBOT CHETS FFTH.3105" ]; then
+              cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
+                 "$PATCH_DIR/AIMBOT CHETS FFTH.3105"
+            fi
+
+            if [ -f "$PATCH_DIR/AIMBOT CHEST FFMX.3105" ] && \
+               [ ! -f "$PATCH_DIR/AIMBOT CHEST  FFMX.3105" ]; then
+              cp "$PATCH_DIR/AIMBOT CHEST FFMX.3105" \
+                 "$PATCH_DIR/AIMBOT CHEST  FFMX.3105"
+            fi
           fi
 
-          # El proyecto tiene CHETS (error de escritura), pero el archivo real es CHEST
-          if [ -f "$PATCH_DIR/AIMBOT CHEST FFTH.3105" ] && \
-             [ ! -f "$PATCH_DIR/AIMBOT CHETS FFTH.3105" ]; then
-            cp "$PATCH_DIR/AIMBOT CHEST FFTH.3105" \
-               "$PATCH_DIR/AIMBOT CHETS FFTH.3105"
-          fi
-
-          # El proyecto tiene dos espacios en CHEST  FFMX
-          if [ -f "$PATCH_DIR/AIMBOT CHEST FFMX.3105" ] && \
-             [ ! -f "$PATCH_DIR/AIMBOT CHEST  FFMX.3105" ]; then
-            cp "$PATCH_DIR/AIMBOT CHEST FFMX.3105" \
-               "$PATCH_DIR/AIMBOT CHEST  FFMX.3105"
-          fi
-
-          echo "Archivos después de la corrección:"
-          ls -la "$PATCH_DIR"
-
-      - name: Show Xcode version
-        run: |
-          xcodebuild -version
-
-      - name: Check project
-        run: |
-          xcodebuild \
-            -project "$PROJECT_PATH" \
-            -list
-
-      - name: Build 3105
+      - name: Compilar 3105
         shell: bash
         run: |
           set -e
@@ -101,20 +127,19 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Find app
+      - name: Buscar APP
         shell: bash
         run: |
           set -e
 
           APP=$(find "$RUNNER_TEMP/3105-build" \
-            -maxdepth 2 \
-            -name "*.app" \
             -type d \
+            -name "*.app" \
             -print -quit)
 
           if [ -z "$APP" ]; then
-            echo "ERROR: No se encontró el archivo .app"
-            find "$RUNNER_TEMP/3105-build" -maxdepth 3 -print
+            echo "ERROR: No se encontró ningún .app"
+            find "$RUNNER_TEMP/3105-build" -maxdepth 4 -print
             exit 1
           fi
 
@@ -123,7 +148,7 @@ jobs:
 
           echo "APP_PATH=$APP" >> "$GITHUB_ENV"
 
-      - name: Create IPA
+      - name: Crear IPA
         shell: bash
         run: |
           set -e
@@ -138,12 +163,12 @@ jobs:
           zip -r -q "3105.ipa" Payload
 
           echo "================================="
-          echo "IPA CREADO CORRECTAMENTE"
+          echo "IPA CREADO"
           echo "================================="
 
           ls -lh "$RUNNER_TEMP/3105.ipa"
 
-      - name: Upload IPA
+      - name: Subir IPA
         uses: actions/upload-artifact@v4
         with:
           name: 3105-ipa
