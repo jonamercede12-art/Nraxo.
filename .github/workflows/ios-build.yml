@@ -1,63 +1,77 @@
-name: Build IPA
+name: Build iOS IPA
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
+    name: Build IPA
     runs-on: macos-15
+
+    defaults:
+      run:
+        working-directory: 3105-main
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract project
+      - name: Select Xcode
         run: |
-          set -e
-          rm -rf project
-          mkdir -p project
-          unzip -q "$(find . -maxdepth 2 -type f -name '*.zip' | head -n 1)" -d project
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+          xcodebuild -version
 
-      - name: Find project
+      - name: Clean
         run: |
-          set -e
-          PROJECT=$(find "$GITHUB_WORKSPACE/project" -type d -name "*.xcodeproj" -print -quit)
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          xcodebuild clean \
+            -project ThreeOneOSFive.xcodeproj \
+            -scheme ThreeOneOSFive \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
 
       - name: Build
         run: |
-          set -e
-
           xcodebuild \
-            -project "$PROJECT" \
-            -scheme "3105" \
+            -project ThreeOneOSFive.xcodeproj \
+            -scheme ThreeOneOSFive \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath "$GITHUB_WORKSPACE/build" \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            clean build
+            CODE_SIGN_IDENTITY=""
 
-      - name: Convert APP to IPA
+      - name: Create IPA
         run: |
-          set -e
+          mkdir -p Payload
 
-          APP=$(find "$GITHUB_WORKSPACE/build/Build/Products" -type d -name "*.app" -print -quit)
+          APP_PATH=$(find build/Build/Products/Release-iphoneos \
+            -maxdepth 1 \
+            -name "*.app" \
+            -type d \
+            | head -n 1)
 
-          if [ -z "$APP" ]; then
-            echo "No se encontró el archivo .app"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No se encontró el .app"
+            find build -type d -name "*.app"
             exit 1
           fi
 
-          mkdir -p "$GITHUB_WORKSPACE/ipa/Payload"
-          cp -R "$APP" "$GITHUB_WORKSPACE/ipa/Payload/"
+          echo "App encontrada: $APP_PATH"
+          cp -R "$APP_PATH" Payload/
 
-          cd "$GITHUB_WORKSPACE/ipa"
-          zip -qry "$GITHUB_WORKSPACE/3105.ipa" Payload
+          rm -f Nraxo-unsigned.ipa
+          zip -r Nraxo-unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: 3105-ipa
-          path: 3105.ipa
+          name: Nraxo-unsigned-IPA
+          path: 3105-main/Nraxo-unsigned.ipa
+          if-no-files-found: error
