@@ -8,45 +8,35 @@ build:
 runs-on: macos-15
 
 steps:
-  - name: Checkout repository
+  - name: Checkout
     uses: actions/checkout@v4
   - name: Setup Xcode
     uses: maxim-lobanov/setup-xcode@v1
     with:
       xcode-version: "16.4"
-  - name: Locate Xcode project
-    id: project
-    shell: bash
+  - name: Verify project
     run: |
       set -e
-      PROJECT=$(find "$GITHUB_WORKSPACE" \
-        -type d \
-        -name "*.xcodeproj" \
-        -print -quit)
-      if [ -z "$PROJECT" ]; then
-        echo "ERROR: No .xcodeproj found in repository."
-        echo "Repository contents:"
-        find "$GITHUB_WORKSPACE" -maxdepth 5 -print
+      PROJECT="$GITHUB_WORKSPACE/3105-main/ThreeOneOSFive/ThreeOneOSFive.xcodeproj"
+      if [ ! -d "$PROJECT" ]; then
+        echo "ERROR: Project not found:"
+        echo "$PROJECT"
+        echo ""
+        find "$GITHUB_WORKSPACE" -maxdepth 6 -name "*.xcodeproj" -print
         exit 1
       fi
-      echo "Found: $PROJECT"
-      echo "path=$PROJECT" >> "$GITHUB_OUTPUT"
-  - name: Prepare patch files
+      echo "Project found:"
+      echo "$PROJECT"
+  - name: Prepare resources
     run: |
-      find "$GITHUB_WORKSPACE" \
-        -type f \
-        -name "*.3105" \
-        -exec chmod 644 {} \;
+      find "$GITHUB_WORKSPACE/3105-main/ThreeOneOSFive/SeedPatches" \
+        -type f -name "*.3105" -exec chmod 644 {} \;
   - name: Build
-    shell: bash
+    working-directory: 3105-main/ThreeOneOSFive
     run: |
       set -e
-      PROJECT="${{ steps.project.outputs.path }}"
-      PROJECT_DIR="$(dirname "$PROJECT")"
-      PROJECT_NAME="$(basename "$PROJECT")"
-      cd "$PROJECT_DIR"
       xcodebuild \
-        -project "$PROJECT_NAME" \
+        -project ThreeOneOSFive.xcodeproj \
         -scheme 3105 \
         -configuration Release \
         -sdk iphoneos \
@@ -55,15 +45,12 @@ steps:
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGN_IDENTITY=""
   - name: Create IPA
-    shell: bash
     run: |
       set -e
-      APP=$(find "$GITHUB_WORKSPACE/build/Build/Products" \
-        -type d \
-        -name "*.app" \
-        -print -quit)
-      if [ -z "$APP" ]; then
-        echo "ERROR: Build completed without producing an .app"
+      APP="$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos/3105.app"
+      if [ ! -d "$APP" ]; then
+        echo "ERROR: 3105.app was not created."
+        find "$GITHUB_WORKSPACE/build" -name "*.app" -print
         exit 1
       fi
       rm -rf "$GITHUB_WORKSPACE/Payload"
