@@ -19,31 +19,43 @@ jobs:
         with:
           xcode-version: "16.4"
 
-      - name: Mostrar archivos del repositorio
+      - name: Descomprimir proyecto
+        shell: bash
         run: |
-          echo "=== Archivos del repositorio ==="
-          find . -maxdepth 5 -type f | sort
-          echo "=== Proyectos Xcode ==="
-          find . -type d -name "*.xcodeproj" -print
+          ZIP_FILE=$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name "*.zip" -print -quit)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No se encontró ningún ZIP en el repositorio."
+            exit 1
+          fi
+
+          echo "ZIP encontrado:"
+          echo "$ZIP_FILE"
+
+          mkdir -p "$GITHUB_WORKSPACE/project"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/project"
+
+          echo "Contenido descomprimido:"
+          find "$GITHUB_WORKSPACE/project" -maxdepth 5 -print
 
       - name: Encontrar proyecto Xcode
         id: project
         shell: bash
         run: |
-          PROJECT=$(find "$GITHUB_WORKSPACE" \
+          PROJECT=$(find "$GITHUB_WORKSPACE/project" \
             -type d \
             -name "ThreeOneOSFive.xcodeproj" \
             -print \
             -quit)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: ThreeOneOSFive.xcodeproj no está en el repositorio."
+            echo "ERROR: No se encontró ThreeOneOSFive.xcodeproj dentro del ZIP."
             echo ""
             echo "Proyectos encontrados:"
-            find "$GITHUB_WORKSPACE" -type d -name "*.xcodeproj" -print
-            echo ""
-            echo "Contenido del repositorio:"
-            find "$GITHUB_WORKSPACE" -maxdepth 5 -print
+            find "$GITHUB_WORKSPACE/project" \
+              -type d \
+              -name "*.xcodeproj" \
+              -print
             exit 1
           fi
 
@@ -64,7 +76,10 @@ jobs:
             chmod -R u+rwX,go+rX "$PROJECT_DIR/SeedPatches"
           fi
 
-          find "$PROJECT_DIR" -type f -name "*.3105" -exec chmod 644 {} \;
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.3105" \
+            -exec chmod 644 {} \;
 
       - name: Limpiar proyecto
         shell: bash
@@ -93,7 +108,7 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Encontrar aplicación compilada
+      - name: Encontrar aplicación
         id: app
         shell: bash
         run: |
@@ -109,7 +124,7 @@ jobs:
             exit 1
           fi
 
-          echo "APP encontrada:"
+          echo "Aplicación encontrada:"
           echo "$APP_PATH"
 
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
