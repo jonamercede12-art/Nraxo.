@@ -1,77 +1,90 @@
 name: Build 3105 IPA
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-15
+build:
+runs-on: macos-15
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "16.4"
-
-      - name: Find project
-        run: |
-          echo "Directorio actual:"
-          pwd
-          echo "Proyectos Xcode:"
-          find . -name "ThreeOneOSFive.xcodeproj" -print
-
-      - name: Prepare files
-        run: |
-          chmod -R u+rwX,go+rX .
-          find . -type f -name "*.3105" -exec chmod 644 {} \;
-
-      - name: Build
-        run: |
-          PROJECT=$(find . -name "ThreeOneOSFive.xcodeproj" -type d -print -quit)
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: No se encontró ThreeOneOSFive.xcodeproj"
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$PROJECT")
-
-          echo "Proyecto: $PROJECT"
-          echo "Directorio: $PROJECT_DIR"
-
-          cd "$PROJECT_DIR"
-
-          xcodebuild \
-            -project ThreeOneOSFive.xcodeproj \
-            -scheme 3105 \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath "$GITHUB_WORKSPACE/build" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-
-      - name: Create IPA
-        run: |
-          APP="$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos/3105.app"
-
-          if [ ! -d "$APP" ]; then
-            echo "ERROR: No se generó 3105.app"
-            find "$GITHUB_WORKSPACE/build" -name "*.app" -print
-            exit 1
-          fi
-
-          rm -rf Payload
-          mkdir Payload
-          cp -R "$APP" Payload/3105.app
-          zip -qry 3105.ipa Payload
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: 3105-IPA
-          path: 3105.ipa
-          if-no-files-found: error
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
+  - name: Show repository structure
+    run: |
+      echo "=== ROOT ==="
+      pwd
+      ls -la
+      echo "=== FILES ==="
+      find . -maxdepth 5 -type f | head -300
+  - name: Find Xcode project
+    id: find_project
+    shell: bash
+    run: |
+      PROJECT=$(find "$GITHUB_WORKSPACE" \
+        -type d \
+        \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) \
+        -print -quit)
+      if [ -z "$PROJECT" ]; then
+        echo "ERROR: No se encontró ningún proyecto Xcode."
+        echo "Contenido del repositorio:"
+        find "$GITHUB_WORKSPACE" -maxdepth 6 -print
+        exit 1
+      fi
+      echo "Proyecto encontrado: $PROJECT"
+      echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+  - name: Prepare files
+    run: |
+      chmod -R u+rwX,go+rX "$GITHUB_WORKSPACE"
+      find "$GITHUB_WORKSPACE" -type f -name "*.3105" -exec chmod 644 {} \;
+  - name: Build
+    shell: bash
+    run: |
+      PROJECT="${{ steps.find_project.outputs.project }}"
+      PROJECT_DIR="$(dirname "$PROJECT")"
+      PROJECT_NAME="$(basename "$PROJECT")"
+      cd "$PROJECT_DIR"
+      if [[ "$PROJECT_NAME" == *.xcworkspace ]]; then
+        xcodebuild \
+          -workspace "$PROJECT_NAME" \
+          -scheme 3105 \
+          -configuration Release \
+          -sdk iphoneos \
+          -derivedDataPath "$GITHUB_WORKSPACE/build" \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_IDENTITY=""
+      else
+        xcodebuild \
+          -project "$PROJECT_NAME" \
+          -scheme 3105 \
+          -configuration Release \
+          -sdk iphoneos \
+          -derivedDataPath "$GITHUB_WORKSPACE/build" \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_IDENTITY=""
+      fi
+  - name: Create IPA
+    shell: bash
+    run: |
+      APP=$(find "$GITHUB_WORKSPACE/build/Build/Products" \
+        -type d \
+        -name "*.app" \
+        -print -quit)
+      if [ -z "$APP" ]; then
+        echo "ERROR: No se encontró ninguna .app después de compilar."
+        exit 1
+      fi
+      echo "App encontrada: $APP"
+      rm -rf "$GITHUB_WORKSPACE/Payload"
+      mkdir -p "$GITHUB_WORKSPACE/Payload"
+      cp -R "$APP" "$GITHUB_WORKSPACE/Payload/"
+      cd "$GITHUB_WORKSPACE"
+      zip -qry 3105.ipa Payload
+  - name: Upload IPA
+    uses: actions/upload-artifact@v4
+    with:
+      name: 3105-IPA
+      path: 3105.ipa
+      if-no-files-found: error
