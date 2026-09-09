@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build 3105 IPA
 
 on:
 workflow_dispatch:
@@ -11,43 +11,59 @@ build:
 runs-on: macos-15
 
 steps:
-  - name: Checkout
+  - name: Descargar proyecto
     uses: actions/checkout@v4
-  - name: Select Xcode
+  - name: Configurar Xcode
     uses: maxim-lobanov/setup-xcode@v1
     with:
       xcode-version: "16.4"
-  - name: Make seed patches readable
+  - name: Preparar archivos
     run: |
-      find ThreeOneOSFive/SeedPatches -type f -exec chmod 644 {} \;
-      find ThreeOneOSFive/SeedPatches -type d -exec chmod 755 {} \;
-  - name: Clean build
+      chmod -R u+rwX,go+rX .
+      find . -type f -name "*.3105" -exec chmod 644 {} \;
+  - name: Limpiar proyecto
+    working-directory: 3105-main/ThreeOneOSFive
     run: |
       xcodebuild clean \
-        -project ThreeOneOSFive/ThreeOneOSFive.xcodeproj \
+        -project ThreeOneOSFive.xcodeproj \
         -scheme 3105 \
         -configuration Release \
         -sdk iphoneos \
         CODE_SIGNING_ALLOWED=NO \
         CODE_SIGNING_REQUIRED=NO
-  - name: Build
+  - name: Compilar aplicación
+    working-directory: 3105-main/ThreeOneOSFive
     run: |
       xcodebuild build \
-        -project ThreeOneOSFive/ThreeOneOSFive.xcodeproj \
+        -project ThreeOneOSFive.xcodeproj \
         -scheme 3105 \
         -configuration Release \
         -sdk iphoneos \
-        -derivedDataPath build \
+        -derivedDataPath "$GITHUB_WORKSPACE/build" \
         CODE_SIGNING_ALLOWED=NO \
         CODE_SIGNING_REQUIRED=NO \
-        CODE_SIGN_IDENTITY=""
-  - name: Package IPA
+        CODE_SIGN_IDENTITY="" \
+        DEVELOPMENT_TEAM=""
+  - name: Crear IPA
     run: |
-      mkdir -p Payload
-      cp -R build/Build/Products/Release-iphoneos/3105.app Payload/
-      zip -r 3105.ipa Payload
-  - name: Upload IPA
+      APP="$GITHUB_WORKSPACE/build/Build/Products/Release-iphoneos/3105.app"
+      if [ ! -d "$APP" ]; then
+        echo "ERROR: 3105.app no fue generado."
+        find "$GITHUB_WORKSPACE/build" -name "*.app" -print
+        exit 1
+      fi
+      rm -rf "$GITHUB_WORKSPACE/Payload"
+      mkdir -p "$GITHUB_WORKSPACE/Payload"
+      cp -R "$APP" "$GITHUB_WORKSPACE/Payload/3105.app"
+      cd "$GITHUB_WORKSPACE"
+      zip -qry 3105.ipa Payload
+      if [ ! -f "$GITHUB_WORKSPACE/3105.ipa" ]; then
+        echo "ERROR: No se pudo crear la IPA."
+        exit 1
+      fi
+  - name: Subir IPA
     uses: actions/upload-artifact@v4
     with:
       name: 3105-IPA
       path: 3105.ipa
+      if-no-files-found: error
