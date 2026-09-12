@@ -19,25 +19,41 @@ jobs:
         with:
           xcode-version: "16.4"
 
-      - name: Descomprimir proyecto
+      - name: Preparar proyecto
         shell: bash
         run: |
-          ZIP_FILE=$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name "*.zip" -print -quit)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No se encontró el ZIP."
-            exit 1
-          fi
+          set -e
 
           rm -rf "$GITHUB_WORKSPACE/project"
           mkdir -p "$GITHUB_WORKSPACE/project"
 
-          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/project"
+          ZIP_COUNT=$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 1 \
+            -type f \
+            -name "3105-part*.zip" \
+            | wc -l | tr -d ' ')
+
+          if [ "$ZIP_COUNT" -eq 0 ]; then
+            echo "ERROR: No se encontraron los archivos 3105-part*.zip."
+            exit 1
+          fi
+
+          echo "Se encontraron $ZIP_COUNT partes."
+
+          for ZIP_FILE in "$GITHUB_WORKSPACE"/3105-part*.zip; do
+            echo "Descomprimiendo: $ZIP_FILE"
+            unzip -q -o "$ZIP_FILE" -d "$GITHUB_WORKSPACE/project"
+          done
+
+          echo "=== Estructura del proyecto ==="
+          find "$GITHUB_WORKSPACE/project" -maxdepth 2 -print
 
       - name: Encontrar proyecto
         id: project
         shell: bash
         run: |
+          set -e
+
           PROJECT=$(find "$GITHUB_WORKSPACE/project" \
             -type d \
             -name "ThreeOneOSFive.xcodeproj" \
@@ -49,7 +65,7 @@ jobs:
             exit 1
           fi
 
-          echo "Proyecto:"
+          echo "Proyecto encontrado:"
           echo "$PROJECT"
 
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
@@ -58,9 +74,11 @@ jobs:
         id: scheme
         shell: bash
         run: |
+          set -e
+
           PROJECT="${{ steps.project.outputs.project }}"
 
-          echo "=== Schemes disponibles ==="
+          echo "=== Información del proyecto ==="
 
           xcodebuild \
             -project "$PROJECT" \
@@ -86,6 +104,8 @@ jobs:
       - name: Preparar archivos .3105
         shell: bash
         run: |
+          set -e
+
           PROJECT="${{ steps.project.outputs.project }}"
           PROJECT_DIR=$(dirname "$PROJECT")
 
@@ -101,10 +121,12 @@ jobs:
       - name: Compilar aplicación
         shell: bash
         run: |
+          set -e
+
           PROJECT="${{ steps.project.outputs.project }}"
           SCHEME="${{ steps.scheme.outputs.scheme }}"
 
-          echo "Compilando:"
+          echo "=== Compilando ==="
           echo "Proyecto: $PROJECT"
           echo "Scheme: $SCHEME"
 
@@ -123,6 +145,8 @@ jobs:
         id: app
         shell: bash
         run: |
+          set -e
+
           APP_PATH=$(find "$GITHUB_WORKSPACE/build" \
             -type d \
             -name "*.app" \
@@ -143,6 +167,8 @@ jobs:
       - name: Crear IPA
         shell: bash
         run: |
+          set -e
+
           APP_PATH="${{ steps.app.outputs.app_path }}"
 
           rm -rf "$GITHUB_WORKSPACE/Payload"
@@ -151,8 +177,12 @@ jobs:
           cp -R "$APP_PATH" "$GITHUB_WORKSPACE/Payload/"
 
           cd "$GITHUB_WORKSPACE"
-          zip -r "3105.ipa" Payload
 
+          rm -f "3105.ipa"
+
+          zip -qr "3105.ipa" Payload
+
+          echo "=== IPA creada ==="
           ls -lh "3105.ipa"
 
       - name: Subir IPA
